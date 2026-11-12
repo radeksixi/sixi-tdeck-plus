@@ -13,15 +13,15 @@ companion firmware. It runs on the device next to the normal companion interface
 
 ## Download & install
 
-**Firmware:** the [`v0.11.5` release](https://github.com/radek-sixi/sixi-tdeck-plus/releases/tag/v0.11.5)
+**Firmware:** the [`v0.11.5` release](https://github.com/radeksixi/sixi-tdeck-plus/releases/tag/v0.11.5)
 has one `.bin` per board, a desktop `.deb` and a firmware bundle. Verify with `sha256sum -c SHA256SUMS`.
 
 T-Deck / T-Deck Plus:
 
 | What | File | Flash at |
 |---|---|---|
-| Full image (first install / recovery) | [`faro-tdeck-0.11.5-merged.bin`](https://github.com/radek-sixi/sixi-tdeck-plus/releases/download/v0.11.5/faro-tdeck-0.11.5-merged.bin) | `0x0` |
-| App only (update, keeps keys & contacts) | [`faro-tdeck-0.11.5-app.bin`](https://github.com/radek-sixi/sixi-tdeck-plus/releases/download/v0.11.5/faro-tdeck-0.11.5-app.bin) | `0x10000` |
+| Full image (first install / recovery) | [`faro-tdeck-0.11.5-merged.bin`](https://github.com/radeksixi/sixi-tdeck-plus/releases/download/v0.11.5/faro-tdeck-0.11.5-merged.bin) | `0x0` |
+| App only (update, keeps keys & contacts) | [`faro-tdeck-0.11.5-app.bin`](https://github.com/radeksixi/sixi-tdeck-plus/releases/download/v0.11.5/faro-tdeck-0.11.5-app.bin) | `0x10000` |
 
 **Three ways to install:**
 
@@ -163,7 +163,7 @@ Report vulnerabilities as described in `SECURITY.md`.
 ## Building
 
 ```sh
-git clone --recurse-submodules https://github.com/radek-sixi/sixi-tdeck-plus.git
+git clone --recurse-submodules https://github.com/radeksixi/sixi-tdeck-plus.git
 cd sixi-tdeck-plus
 scripts/link_env.sh                                  # links envs/faro.ini into the MeshCore submodule
 pio run -d external/MeshCore -e faro_tdeck           # firmware

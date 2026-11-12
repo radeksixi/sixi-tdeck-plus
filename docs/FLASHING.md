@@ -45,7 +45,7 @@ You can flash from Chrome or Edge without installing anything, using an
   host without it, so for URL-based flashing use the CORS-enabled copy on GitHub Pages:
 
   ```
-  https://radek-sixi.github.io/sixi-tdeck-plus/firmware/v0.11.5/faro-tdeck-0.11.5-merged.bin
+  https://radeksixi.github.io/sixi-tdeck-plus/firmware/v0.11.5/faro-tdeck-0.11.5-merged.bin
   ```
 
   (same pattern for the other boards and the `-app.bin`; the Mesh America configurator catalog also lists Faro).

@@ -17,7 +17,7 @@ names are matched character-for-character against the official MeshCore catalog,
 folded into the existing device tiles instead of creating duplicates.
 
 Usage:
-  scripts/build_mesh_america_catalog.py --out _site --base-url https://radek-sixi.github.io/sixi-tdeck-plus
+  scripts/build_mesh_america_catalog.py --out _site --base-url https://radeksixi.github.io/sixi-tdeck-plus
 
 Requires the `gh` CLI (GH_TOKEN in CI). Exit status: 0 ok, 1 download/build error, 2 usage error.
 """
@@ -56,7 +56,7 @@ DESCRIPTION = (
     "keep working."
 )
 
-DEFAULT_REPO = "radek-sixi/sixi-tdeck-plus"
+DEFAULT_REPO = "radeksixi/sixi-tdeck-plus"
 
 
 def run(cmd, **kwargs):

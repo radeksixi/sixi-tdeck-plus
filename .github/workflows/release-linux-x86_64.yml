@@ -19,7 +19,7 @@ env:
 
 jobs:
   gates:
-    if: github.repository == 'radek-sixi/sixi-tdeck-plus'   # public repository only
+    if: github.repository == 'radeksixi/sixi-tdeck-plus'   # public repository only
     name: Edition and licence gates
     runs-on: ubuntu-24.04
     steps:
@@ -49,7 +49,7 @@ jobs:
       - run: scripts/license_audit.sh
 
   firmware:
-    if: github.repository == 'radek-sixi/sixi-tdeck-plus'   # public repository only
+    if: github.repository == 'radeksixi/sixi-tdeck-plus'   # public repository only
     name: Firmware ${{ matrix.env }}
     needs: gates
     runs-on: ubuntu-24.04
@@ -109,7 +109,7 @@ jobs:
           retention-days: 7
 
   host:
-    if: github.repository == 'radek-sixi/sixi-tdeck-plus'   # public repository only
+    if: github.repository == 'radeksixi/sixi-tdeck-plus'   # public repository only
     name: Linux x86_64 desktop build
     needs: gates
     runs-on: ubuntu-24.04
@@ -141,7 +141,7 @@ jobs:
           retention-days: 7
 
   release:
-    if: github.repository == 'radek-sixi/sixi-tdeck-plus'   # public repository only
+    if: github.repository == 'radeksixi/sixi-tdeck-plus'   # public repository only
     name: Package and upload
     needs: [firmware, host]
     runs-on: ubuntu-24.04

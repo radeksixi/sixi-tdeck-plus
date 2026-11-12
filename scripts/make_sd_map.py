@@ -28,7 +28,7 @@ import time
 import urllib.parse
 import urllib.request
 
-USER_AGENT = "FaroSdMapTool/0.9 (+https://github.com/radek-sixi/sixi-tdeck-plus; offline SD tiles for Faro)"
+USER_AGENT = "FaroSdMapTool/0.9 (+https://github.com/radeksixi/sixi-tdeck-plus; offline SD tiles for Faro)"
 OSM_ATTRIBUTION = "© OpenStreetMap contributors"
 # Hosts whose usage policy forbids bulk/offline downloads. Add to this list, never remove.
 FORBIDDEN_HOSTS = ("tile.openstreetmap.org", "tile.osm.org")

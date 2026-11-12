@@ -75,7 +75,7 @@ pio run -d external/MeshCore -e faro_tdeck
 
 The source of the LGPL components for a release is available from their upstream repositories at the
 versions above. For at least three years after each release we will also provide it on request
-(open an issue at https://github.com/radek-sixi/sixi-tdeck-plus/issues).
+(open an issue at https://github.com/radeksixi/sixi-tdeck-plus/issues).
 
 ## Desktop binaries (`faro-sim`, `faro-console`)
 

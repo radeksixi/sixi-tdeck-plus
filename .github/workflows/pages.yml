@@ -27,7 +27,7 @@ concurrency:
 
 jobs:
   build:
-    if: github.repository == 'radek-sixi/sixi-tdeck-plus'   # public repository only
+    if: github.repository == 'radeksixi/sixi-tdeck-plus'   # public repository only
     name: Build catalog
     runs-on: ubuntu-24.04
     steps:
@@ -48,7 +48,7 @@ jobs:
           path: _site
 
   deploy:
-    if: github.repository == 'radek-sixi/sixi-tdeck-plus'   # public repository only
+    if: github.repository == 'radeksixi/sixi-tdeck-plus'   # public repository only
     name: Deploy
     needs: build
     runs-on: ubuntu-24.04
@@ -60,7 +60,7 @@ jobs:
         uses: actions/deploy-pages@v5.0.1
 
   check:
-    if: github.repository == 'radek-sixi/sixi-tdeck-plus'   # public repository only
+    if: github.repository == 'radeksixi/sixi-tdeck-plus'   # public repository only
     name: Check the live catalog
     needs: deploy
     runs-on: ubuntu-24.04

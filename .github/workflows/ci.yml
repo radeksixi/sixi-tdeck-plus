@@ -21,7 +21,7 @@ env:
 
 jobs:
   gates:
-    if: github.repository == 'radek-sixi/sixi-tdeck-plus'   # public repository only
+    if: github.repository == 'radeksixi/sixi-tdeck-plus'   # public repository only
     name: Edition and licence gates
     runs-on: ubuntu-24.04
     steps:
@@ -49,7 +49,7 @@ jobs:
         run: scripts/license_audit.sh
 
   host:
-    if: github.repository == 'radek-sixi/sixi-tdeck-plus'   # public repository only
+    if: github.repository == 'radeksixi/sixi-tdeck-plus'   # public repository only
     name: Host build and tests (-Wall -Wextra)
     runs-on: ubuntu-24.04
     env:
@@ -76,7 +76,7 @@ jobs:
         run: python3 scripts/check-edition.py --no-history build/faro-sim build/faro-console
 
   firmware:
-    if: github.repository == 'radek-sixi/sixi-tdeck-plus'   # public repository only
+    if: github.repository == 'radeksixi/sixi-tdeck-plus'   # public repository only
     name: Firmware ${{ matrix.env }}
     runs-on: ubuntu-24.04
     strategy:

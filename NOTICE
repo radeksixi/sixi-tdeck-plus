@@ -101,7 +101,7 @@ LGPL components (items 10 and 11): your rights
     available from the upstream URLs above at the versions listed in
     docs/THIRD_PARTY.md. For at least three years after each release we will
     also provide that source on request: open an issue at
-    https://github.com/radek-sixi/sixi-tdeck-plus/issues.
+    https://github.com/radeksixi/sixi-tdeck-plus/issues.
 
 Desktop binaries only (dynamically linked system libraries, not shipped):
 

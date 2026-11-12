@@ -31,7 +31,7 @@ HOST_BUILD="${FARO_HOST_BUILD:-${ROOT_DIR}/build}"
 DIST="${FARO_DIST_DIR:-${ROOT_DIR}/dist}"
 FW_ENVS="${FARO_FW_ENVS-faro_tdeck faro_tdeck_max faro_heltec_v3 faro_tbeam_supreme faro_thinknode_m9}"
 HOST_BINS="${FARO_HOST_BINS-faro-sim faro-console}"
-DEB_MAINTAINER="${FARO_DEB_MAINTAINER:-Sixi AI <https://github.com/radek-sixi/sixi-tdeck-plus/issues>}"
+DEB_MAINTAINER="${FARO_DEB_MAINTAINER:-Sixi AI <https://github.com/radeksixi/sixi-tdeck-plus/issues>}"
 GIT_SHA="$(git -C "${ROOT_DIR}" rev-parse --short=10 HEAD)"
 MESHCORE_SHA="$(git -C "${ROOT_DIR}/external/MeshCore" rev-parse --short=10 HEAD)"
 
@@ -134,7 +134,7 @@ if [[ -n "${HOST_BINS// /}" ]]; then
   cat > "${DOC_DIR}/copyright" <<EOF
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: Faro
-Source: https://github.com/radek-sixi/sixi-tdeck-plus
+Source: https://github.com/radeksixi/sixi-tdeck-plus
 
 Files: *
 Copyright: 2026 Sixi AI
@@ -158,7 +158,7 @@ Priority: optional
 Architecture: ${DEBARCH}
 Depends: libsdl2-2.0-0, libpng16-16t64 | libpng16-16
 Maintainer: ${DEB_MAINTAINER}
-Homepage: https://github.com/radek-sixi/sixi-tdeck-plus
+Homepage: https://github.com/radeksixi/sixi-tdeck-plus
 Description: Faro desktop console and simulator for MeshCore
  Native LVGL 9 desktop companion console (faro-console) and UI simulator
  (faro-sim) for MeshCore companion radios over WiFi TCP (:5000) or USB serial.
