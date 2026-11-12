@@ -50,6 +50,12 @@ DEVICES = (
     },
 )
 
+# Headless companion boards: omitted from the Mesh America GUI catalog, but mirrored into
+# _site/firmware/<tag>/ so the GitHub Pages Web Flasher and docs/FLASHING.md CORS URLs work
+# identically across all 5 supported boards.
+HEADLESS_BOARDS = ("tbeam-supreme", "heltec-v3")
+ROOT_DIR = Path(__file__).resolve().parent.parent
+
 DESCRIPTION = (
     "Faro adds an on-device touch, keyboard and trackball UI to MeshCore companion firmware. "
     "It runs on unmodified MeshCore, so the phone app over Bluetooth and TCP clients over Wi-Fi "
@@ -139,6 +145,8 @@ def build_catalog(releases, repo, out_dir, base_url, work_dir):
                 "notes": f"Faro {ver} — release notes: https://github.com/{repo}/releases/tag/{tag}",
                 "files": files,
             }
+        for board in HEADLESS_BOARDS:
+            version_files(tag, ver, board, assets, out_dir, base_url)
 
     catalog = {
         "description": DESCRIPTION,
@@ -187,7 +195,28 @@ def check_catalog(catalog, out_dir, base_url):
     return errors
 
 
-def write_index(catalog, out_dir):
+def write_web_flasher(latest_tag, catalog, out_dir, repo):
+    wf_dir = ROOT_DIR / "web-flasher"
+    latest_ver = latest_tag.lstrip("v")
+    if (wf_dir / "index.html").is_file():
+        tpl_ver = "0.12.1"
+        tdeck_mf = wf_dir / "manifest-tdeck.json"
+        if tdeck_mf.is_file():
+            tpl_ver = json.loads(tdeck_mf.read_text(encoding="utf-8")).get("version", tpl_ver)
+        html = (wf_dir / "index.html").read_text(encoding="utf-8")
+        html = html.replace(f"v{tpl_ver}", latest_tag).replace(tpl_ver, latest_ver)
+        html = html.replace(DEFAULT_REPO, repo)
+        (out_dir / "index.html").write_text(html, encoding="utf-8")
+        for mf in sorted(wf_dir.glob("manifest-*.json")):
+            board = mf.stem[len("manifest-"):]
+            data = json.loads(mf.read_text(encoding="utf-8"))
+            data["name"] = data["name"].replace(tpl_ver, latest_ver)
+            data["version"] = latest_ver
+            data["new_install_prompt_erase"] = True
+            data["builds"][0]["parts"][0]["path"] = f"./firmware/{latest_tag}/faro-{board}-{latest_ver}-merged.bin"
+            (out_dir / mf.name).write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        return
+
     html = f"""<!doctype html>
 <html lang="en">
 <head>
@@ -199,7 +228,7 @@ def write_index(catalog, out_dir):
   <h1>Faro</h1>
   <p>{catalog["description"]}</p>
   <p><a href="catalog.json">catalog.json</a> — provider catalog for the Mesh America Device Configurator.</p>
-  <p><a href="https://github.com/{DEFAULT_REPO}/releases">Firmware releases</a></p>
+  <p><a href="https://github.com/{repo}/releases">Firmware releases</a></p>
 </body>
 </html>
 """
@@ -238,7 +267,7 @@ def main():
     (out_dir / "catalog.json").write_text(
         json.dumps(catalog, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
     )
-    write_index(catalog, out_dir)
+    write_web_flasher(releases[0]["tagName"], catalog, out_dir, args.repo)
     print(f"wrote {out_dir}/catalog.json ({len(catalog['device'])} devices, {len(releases)} releases)")
 
 

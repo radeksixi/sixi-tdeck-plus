@@ -57,14 +57,12 @@ bool SdCard::begin() {
   gpio_pullup_en((gpio_num_t)kPinMiso);
   bool mounted = SD.begin(kPinCs, SPI);
   if (!mounted) {
-    // Cleanly reset SPI bus and send dummy clocks with CS=HIGH to recover card state
+    // Send dummy clocks with CS=HIGH to recover card state without tearing down the shared FSPI bus
     SD.end();
-    SPI.end();
     delay(10);
     digitalWrite(9, HIGH);
     digitalWrite(12, HIGH);
     digitalWrite(kPinCs, HIGH);
-    SPI.begin(kPinSclk, kPinMiso, kPinMosi, -1);
     pinMode(kPinMiso, INPUT_PULLUP);
     gpio_pullup_en((gpio_num_t)kPinMiso);
     SPI.beginTransaction(SPISettings(400000, MSBFIRST, SPI_MODE0));

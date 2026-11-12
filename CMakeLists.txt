@@ -1,12 +1,24 @@
 # SPDX-License-Identifier: Apache-2.0
 cmake_minimum_required(VERSION 3.20)
-project(faro LANGUAGES C CXX)
+project(faro VERSION 0.12.1 LANGUAGES C CXX)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 enable_testing()
+
+# Strip local workspace and home paths from __FILE__/assert/debug strings in host artefacts
+add_compile_options(
+  "-ffile-prefix-map=${CMAKE_SOURCE_DIR}=."
+  "-fmacro-prefix-map=${CMAKE_SOURCE_DIR}=."
+)
+if(DEFINED ENV{HOME} AND NOT "$ENV{HOME}" STREQUAL "")
+  add_compile_options(
+    "-ffile-prefix-map=$ENV{HOME}=/build"
+    "-fmacro-prefix-map=$ENV{HOME}=/build"
+  )
+endif()
 
 # Optional CMake file of an out-of-tree extension (one extension per build tree)
 set(FARO_EXTENSION_CMAKE "" CACHE FILEPATH "Extension CMake file included after faro_core")
@@ -33,6 +45,7 @@ target_compile_options(faro_core PRIVATE -Wall -Wextra)
 add_executable(test_core
   tests/unit/test_core.cpp
 )
+target_compile_options(test_core PRIVATE -UNDEBUG)
 target_link_libraries(test_core PRIVATE faro_core m)
 add_test(NAME test_core COMMAND test_core)
 
@@ -44,6 +57,7 @@ endif()
 add_executable(test_companion_client
   tests/unit/test_companion_client.cpp
 )
+target_compile_options(test_companion_client PRIVATE -UNDEBUG)
 target_link_libraries(test_companion_client PRIVATE faro_core pthread m)
 add_test(NAME test_companion_client COMMAND test_companion_client)
 
@@ -86,7 +100,6 @@ if(EXISTS "${LVGL_ROOT}/src/lv_init.c")
     app/ui/AppViewsMesh.cpp
     app/ui/AppViewsMessaging.cpp
     app/ui/AppViewsSettings.cpp
-    app/ui/AppViewsSixi.cpp
     app/ui/Theme.cpp
     app/ui/i18n/Strings.cpp
     app/ui/fonts/faro_font_12.c
@@ -95,12 +108,14 @@ if(EXISTS "${LVGL_ROOT}/src/lv_init.c")
     app/ui/fonts/faro_font_mono_12.c
     app/ui/fonts/faro_font_emoji.c
     sim/VirtualMeshActions.cpp
+    ${FARO_UI_EXTENSION_SRCS}
   )
   target_include_directories(faro_ui PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/app
     ${CMAKE_CURRENT_SOURCE_DIR}/app/ui
     ${CMAKE_CURRENT_SOURCE_DIR}/sim
   )
+  target_compile_definitions(faro_ui PUBLIC FARO_VERSION="${PROJECT_VERSION}")
   target_link_libraries(faro_ui PUBLIC faro_core lvgl_host m)
 
   find_package(PNG REQUIRED)
@@ -149,6 +164,7 @@ if(EXISTS "${LVGL_ROOT}/src/lv_init.c")
   add_executable(test_ui_sim
     tests/unit/test_ui_sim.cpp
   )
+  target_compile_options(test_ui_sim PRIVATE -UNDEBUG)
   target_link_libraries(test_ui_sim PRIVATE faro_ui m)
   add_test(NAME test_ui_sim COMMAND test_ui_sim)
 endif()

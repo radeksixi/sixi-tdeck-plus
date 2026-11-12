@@ -5,6 +5,8 @@
 #include <WiFi.h>
 #include <SHA256.h>
 #include <ctype.h>
+#include <stdio.h>
+#include <unistd.h>
 #if defined(ESP32)
 #include <esp_wifi.h>
 #include <esp_system.h>
@@ -161,7 +163,6 @@ void DeviceMeshActions::startWifiTransport() {
   // this call the listener accepted TCP clients but the mesh loop never polled it.
   wifi_interface.enable();
   _ifaces->addInterface(InterfaceType::WiFi, &wifi_interface);
-  _store.status().wifi_auth_enabled = guarded;
   Serial.printf("[FARO-WIFI] transport ready (guarded=%d, port=5000)\n", int(guarded));
 #endif
 }
@@ -169,10 +170,15 @@ void DeviceMeshActions::startWifiTransport() {
 bool DeviceMeshActions::startWifiSetupAp(char* out_ssid, size_t ssid_len, char* out_pwd, size_t pwd_len,
                                          char* out_ip, size_t ip_len) {
 #if defined(ESP32) && defined(ENABLE_WIFI_INTERFACE)
+  auto copyOut = [](char* dst, size_t cap, const char* src) {
+    if (!dst || cap == 0) return;
+    strncpy(dst, src, cap - 1);
+    dst[cap - 1] = '\0';
+  };
   if (_wifi_setup_active) {
-    if (out_ssid && ssid_len) strncpy(out_ssid, _store.status().wifi_ap_ssid, ssid_len - 1);
-    if (out_pwd && pwd_len) strncpy(out_pwd, _store.status().wifi_ap_pwd, pwd_len - 1);
-    if (out_ip && ip_len) strncpy(out_ip, _store.status().wifi_ap_ip, ip_len - 1);
+    copyOut(out_ssid, ssid_len, _store.status().wifi_ap_ssid);
+    copyOut(out_pwd, pwd_len, _store.status().wifi_ap_pwd);
+    copyOut(out_ip, ip_len, _store.status().wifi_ap_ip);
     return true;
   }
 
@@ -180,34 +186,54 @@ bool DeviceMeshActions::startWifiSetupAp(char* out_ssid, size_t ssid_len, char* 
   esp_read_mac(mac, ESP_MAC_WIFI_STA);
   char ssid[33] = {0};
   snprintf(ssid, sizeof(ssid), "Faro-%02X%02X", mac[4], mac[5]);
-  static const char kPwdChars[] = "abcdefghjkmnpqrstuvwxyz23456789";
+  static const char kPwdChars[] = "abcdefghjkmnpqrstuvwxyz23456789";  // 31 unambiguous chars
   char pwd[16] = {0};
-  uint8_t rnd[8] = {0};
-  core::fillRandom(rnd, sizeof(rnd));
-  for (size_t i = 0; i < 8; ++i) pwd[i] = kPwdChars[rnd[i] % (sizeof(kPwdChars) - 1)];
+  for (size_t i = 0; i < 8; ++i) {
+    uint8_t b = 0;
+    do {
+      core::fillRandom(&b, 1);
+    } while (b >= 248);  // 248 = 8 * 31: unbiased mod 31
+    pwd[i] = kPwdChars[b % 31];
+  }
   pwd[8] = '\0';
 
-  WiFi.mode(WIFI_AP_STA);  // keep the station link, add the setup AP
+  uint8_t csrf_raw[8] = {0};
+  core::fillRandom(csrf_raw, sizeof(csrf_raw));
+  AppStore::bytesToHex(csrf_raw, sizeof(csrf_raw), _wifi_setup_csrf, sizeof(_wifi_setup_csrf));
+
+  // Pause TCP 5000 and background STA channel-hopping while the temporary setup AP is up
+  wifi_interface.disable();
+  ::wifi_needs_reconnect = false;
+
+  WiFi.mode(WIFI_AP_STA);  // keep any active station link, add the setup AP
   if (!WiFi.softAP(ssid, pwd)) {
     Serial.println("[FARO-WIFI-AP] softAP start failed");
+    volatile char* vp = pwd;
+    for (size_t i = 0; i < sizeof(pwd); ++i) vp[i] = 0;
+    if (_prefs && _prefs->wifi_enabled && _prefs->wifi_ssid[0]) startWifiTransport();
     return false;
   }
-  _wifi_setup_server = new WiFiServer(80);
+  _wifi_setup_server = new WiFiServer(IPAddress(192, 168, 4, 1), 80);
   if (_wifi_setup_server) static_cast<WiFiServer*>(_wifi_setup_server)->begin();
   _wifi_setup_active = true;
   _wifi_setup_started_ms = millis();
 
   SystemStatus& st = _store.status();
   strncpy(st.wifi_ap_ssid, ssid, sizeof(st.wifi_ap_ssid) - 1);
+  st.wifi_ap_ssid[sizeof(st.wifi_ap_ssid) - 1] = '\0';
   strncpy(st.wifi_ap_pwd, pwd, sizeof(st.wifi_ap_pwd) - 1);
+  st.wifi_ap_pwd[sizeof(st.wifi_ap_pwd) - 1] = '\0';
   strncpy(st.wifi_ap_ip, "192.168.4.1", sizeof(st.wifi_ap_ip) - 1);
+  st.wifi_ap_ip[sizeof(st.wifi_ap_ip) - 1] = '\0';
   st.wifi_ap_active = true;
   _store.bumpVersion();
   Serial.printf("[FARO-WIFI-AP] started ssid='%s' ip=%s\n", ssid, st.wifi_ap_ip);
 
-  if (out_ssid && ssid_len) strncpy(out_ssid, ssid, ssid_len - 1);
-  if (out_pwd && pwd_len) strncpy(out_pwd, pwd, pwd_len - 1);
-  if (out_ip && ip_len) strncpy(out_ip, "192.168.4.1", ip_len - 1);
+  copyOut(out_ssid, ssid_len, ssid);
+  copyOut(out_pwd, pwd_len, pwd);
+  copyOut(out_ip, ip_len, "192.168.4.1");
+  volatile char* vp = pwd;
+  for (size_t i = 0; i < sizeof(pwd); ++i) vp[i] = 0;
   return true;
 #else
   (void)out_ssid; (void)ssid_len; (void)out_pwd; (void)pwd_len; (void)out_ip; (void)ip_len;
@@ -224,10 +250,12 @@ void DeviceMeshActions::stopWifiSetupAp() {
     _wifi_setup_server = nullptr;
   }
   _wifi_setup_active = false;
+  memset(_wifi_setup_csrf, 0, sizeof(_wifi_setup_csrf));
   SystemStatus& st = _store.status();
   st.wifi_ap_active = false;
   st.wifi_ap_ssid[0] = '\0';
-  st.wifi_ap_pwd[0] = '\0';
+  volatile char* vp = st.wifi_ap_pwd;
+  for (size_t i = 0; i < sizeof(st.wifi_ap_pwd); ++i) vp[i] = 0;
   _store.bumpVersion();
   WiFi.softAPdisconnect(true);
   if (!_prefs || !_prefs->wifi_enabled) {
@@ -235,6 +263,9 @@ void DeviceMeshActions::stopWifiSetupAp() {
   } else {
     WiFi.mode(WIFI_STA);
     WiFi.setSleep(true);  // ESP-IDF requires modem sleep while BLE is also enabled
+    if (_prefs->wifi_ssid[0]) {
+      startWifiTransport();
+    }
   }
   Serial.println("[FARO-WIFI-AP] stopped");
 #endif
@@ -247,6 +278,7 @@ bool DeviceMeshActions::wifiSetupApActive() const {
 void DeviceMeshActions::pollWifiSetup() {
 #if defined(ESP32) && defined(ENABLE_WIFI_INTERFACE)
   if (!_wifi_setup_active) return;
+  ::wifi_needs_reconnect = false;
   if (millis() - _wifi_setup_started_ms > 300000UL) {
     Serial.println("[FARO-WIFI-AP] 5 min timeout, stopping");
     stopWifiSetupAp();
@@ -257,12 +289,15 @@ void DeviceMeshActions::pollWifiSetup() {
   WiFiClient cli = srv->available();
   if (!cli) return;
 
-  char req[512] = {0};
+  char req[1024] = {0};
   size_t n = 0;
+  size_t header_end = 0;
+  size_t content_len = 0;
   const uint32_t t0 = millis();
-  while (cli.connected() && millis() - t0 < 200 && n + 1 < sizeof(req)) {
+  while (cli.connected() && millis() - t0 < 250 && n + 1 < sizeof(req)) {
     const int avail = cli.available();
     if (avail <= 0) {
+      if (header_end > 0 && n >= header_end + content_len) break;
       delay(5);  // let the client/stack breathe instead of busy-waiting the UI loop
       continue;
     }
@@ -270,66 +305,98 @@ void DeviceMeshActions::pollWifiSetup() {
                             (avail < int(sizeof(req) - 1 - n)) ? avail : int(sizeof(req) - 1 - n));
     if (rd <= 0) break;
     n += size_t(rd);
-    if (n >= 4 && req[n - 4] == '\r' && req[n - 3] == '\n' &&
-        req[n - 2] == '\r' && req[n - 1] == '\n') break;  // end of request line/headers
+    req[n] = '\0';
+    if (header_end == 0) {
+      if (const char* hdr_sep = strstr(req, "\r\n\r\n")) {
+        header_end = size_t(hdr_sep - req) + 4;
+        for (const char* line = req; line < hdr_sep; ) {
+          const char* eol = strstr(line, "\r\n");
+          if (!eol || eol > hdr_sep) break;
+          if (strncasecmp(line, "Content-Length:", 15) == 0) {
+            const unsigned long cl = strtoul(line + 15, nullptr, 10);
+            content_len = cl < 512UL ? size_t(cl) : 512U;
+          }
+          line = eol + 2;
+        }
+        if (strncmp(req, "POST ", 5) != 0 || n >= header_end + content_len) break;
+      }
+    } else if (n >= header_end + content_len) {
+      break;
+    }
   }
   req[n] = '\0';
 
-  const char* ok_headers = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\n\r\n";
-  const char* kFormBody =
-      "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>"
-      "<title>Faro WiFi setup</title>"
-      "<body style='background:#0d1117;color:#e6edf3;font-family:sans-serif;margin:24px'>"
-      "<h2>Faro WiFi setup</h2>"
-      "<form action=/save>"
-      "<label>Wi-Fi SSID <input name=ssid maxlength=32></label><br><br>"
-      "<label>Password <input name=pwd type=password maxlength=63></label><br><br>"
-      "<button>Connect</button></form></body>";
+  auto scrubBuf = [](char* b, size_t len) {
+    volatile char* vb = b;
+    for (size_t i = 0; i < len; ++i) vb[i] = 0;
+  };
 
-  if (strncmp(req, "GET ", 4) != 0) {
+  const char* ok_headers =
+      "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n"
+      "Cache-Control: no-store\r\nConnection: close\r\n\r\n";
+  auto sendForm = [&]() {
     cli.print(ok_headers);
-    cli.print(kFormBody);
+    cli.print("<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>"
+              "<title>Faro WiFi setup</title>"
+              "<body style='background:#0d1117;color:#e6edf3;font-family:sans-serif;margin:24px'>"
+              "<h2>Faro WiFi setup</h2>"
+              "<form method=post action=/save>"
+              "<input type=hidden name=tok value='");
+    cli.print(_wifi_setup_csrf);
+    cli.print("'>"
+              "<label>Wi-Fi SSID <input name=ssid maxlength=32 required></label><br><br>"
+              "<label>Password <input name=pwd type=password maxlength=63></label><br><br>"
+              "<button>Connect</button></form></body>");
     cli.stop();
-    return;
-  }
-  char pathbuf[128] = {0};
-  const char* path = req + 4;
-  const char* sp = strchr(path, ' ');
-  size_t plen = sp ? size_t(sp - path) : strlen(path);
-  if (plen >= sizeof(pathbuf)) plen = sizeof(pathbuf) - 1;
-  memcpy(pathbuf, path, plen);
-  pathbuf[plen] = '\0';
+  };
 
-  if (strncmp(pathbuf, "/save?", 6) == 0) {
+  if (strncmp(req, "POST /save ", 11) == 0 && header_end > 0 && header_end <= n) {
     char ssid[33] = {0};
     char pwd[65] = {0};
-    char* p = pathbuf + 6;
+    char tok[32] = {0};
+    bool overflow = false;
+    char* p = req + header_end;
     while (*p) {
-      char* eq = strchr(p, '=');
       char* amp = strchr(p, '&');
       char* end = amp ? amp : (p + strlen(p));
-      if (eq && eq < end) {
+      char* eq = static_cast<char*>(memchr(p, '=', size_t(end - p)));
+      if (eq) {
         char key[16] = {0};
-        char val[96] = {0};
+        char val[256] = {0};
         const size_t kl = size_t(eq - p);
-        if (kl < sizeof(key)) memcpy(key, p, kl);
         const size_t vl = size_t(end - (eq + 1));
-        if (vl < sizeof(val)) memcpy(val, eq + 1, vl);
-        char dec[96] = {0};
-        urlDecodeInto(val, dec, sizeof(dec));
-        if (strcmp(key, "ssid") == 0) {
-          strncpy(ssid, dec, sizeof(ssid) - 1);
-          ssid[sizeof(ssid) - 1] = '\0';
-        } else if (strcmp(key, "pwd") == 0) {
-          strncpy(pwd, dec, sizeof(pwd) - 1);
-          pwd[sizeof(pwd) - 1] = '\0';
+        if (kl < sizeof(key) && vl < sizeof(val)) {
+          memcpy(key, p, kl);
+          memcpy(val, eq + 1, vl);
+          char dec[96] = {0};
+          urlDecodeInto(val, dec, sizeof(dec));
+          if (strcmp(key, "ssid") == 0) {
+            if (strlen(dec) > 32) overflow = true;
+            strncpy(ssid, dec, sizeof(ssid) - 1);
+          } else if (strcmp(key, "pwd") == 0) {
+            const size_t pl = strlen(dec);
+            if ((pl > 0 && pl < 8) || pl > 63) overflow = true;
+            strncpy(pwd, dec, sizeof(pwd) - 1);
+          } else if (strcmp(key, "tok") == 0) {
+            strncpy(tok, dec, sizeof(tok) - 1);
+          }
+          scrubBuf(dec, sizeof(dec));
+        } else {
+          overflow = true;
         }
+        scrubBuf(val, sizeof(val));
       }
       if (amp) p = amp + 1;
       else break;
     }
 
-    if (ssid[0]) {
+    uint8_t diff = uint8_t(_wifi_setup_csrf[0] == '\0');
+    for (size_t i = 0; i < 16; ++i) {
+      diff |= uint8_t(tok[i]) ^ uint8_t(_wifi_setup_csrf[i]);
+    }
+    diff |= uint8_t(tok[16] != '\0');
+
+    if (!overflow && diff == 0 && ssid[0]) {
       cli.print(ok_headers);
       cli.print("<meta charset=utf-8><body style='font-family:sans-serif;background:#0d1117;color:#e6edf3;margin:24px'>"
                 "<h2>Saved</h2><p>The device is joining the Wi-Fi network. You can close this page and reconnect "
@@ -337,21 +404,24 @@ void DeviceMeshActions::pollWifiSetup() {
       cli.flush();
       delay(20);
       cli.stop();
-      // Joining the station switches the radio out of AP mode; tear the AP down afterwards.
-      setWifiConfig(true, ssid, pwd[0] ? pwd : "");
+      // Tear down the temporary setup AP first, then apply and start STA + transport cleanly.
       stopWifiSetupAp();
+      setWifiConfig(true, ssid, pwd[0] ? pwd : "");
+      scrubBuf(pwd, sizeof(pwd));
+      scrubBuf(req, sizeof(req));
       return;
     }
     cli.print(ok_headers);
     cli.print("<meta charset=utf-8><body style='font-family:sans-serif;background:#0d1117;color:#e6edf3;margin:24px'>"
-              "<h2>Missing SSID</h2><a href=/>Back</a></body>");
+              "<h2>Invalid SSID, WPA2 password length (8-63), or expired form</h2><a href=/>Back</a></body>");
     cli.stop();
+    scrubBuf(pwd, sizeof(pwd));
+    scrubBuf(req, sizeof(req));
     return;
   }
 
-  cli.print(ok_headers);
-  cli.print(kFormBody);
-  cli.stop();
+  sendForm();
+  scrubBuf(req, sizeof(req));
 #endif
 }
 
@@ -621,14 +691,17 @@ void DeviceMeshActions::pollTelemetry(uint32_t now_ms, uint16_t batt_mv, uint8_t
     if (connected) {
       _wifi_disconnected_since_ms = 0;
       ::wifi_needs_reconnect = false;
-      strncpy(st.wifi_ip, WiFi.localIP().toString().c_str(), sizeof(st.wifi_ip) - 1);
+      const IPAddress local_ip = WiFi.localIP();
+      strncpy(st.wifi_ip, local_ip.toString().c_str(), sizeof(st.wifi_ip) - 1);
       st.wifi_ip[sizeof(st.wifi_ip) - 1] = '\0';
     } else {
       strncpy(st.wifi_ip, "0.0.0.0", sizeof(st.wifi_ip) - 1);
       // Upstream's reconnect loop only retries when this flag is set. It is normally set by the
       // event handler registered in main.cpp, but that handler does not exist when WiFi was
       // configured from Settings after boot. Poll here so a runtime-configured link also retries.
-      if (_wifi_disconnected_since_ms == 0) {
+      if (_wifi_setup_active) {
+        ::wifi_needs_reconnect = false;
+      } else if (_wifi_disconnected_since_ms == 0) {
         _wifi_disconnected_since_ms = now_ms;
       } else if (now_ms - _wifi_disconnected_since_ms > 10000U) {
         ::wifi_needs_reconnect = true;
@@ -1152,10 +1225,10 @@ bool DeviceMeshActions::setWifiConfig(bool enabled, const char* ssid, const char
 #endif
     WiFi.disconnect(true);
     WiFi.mode(WIFI_OFF);  // power the modem down: disconnect() alone leaves the radio on
+    board.setInhibitSleep(false);
     _store.status().wifi_connected = false;
     strncpy(_store.status().wifi_ip, "0.0.0.0", sizeof(_store.status().wifi_ip) - 1);
     _store.status().wifi_ip[sizeof(_store.status().wifi_ip) - 1] = '\0';
-    _store.status().wifi_auth_enabled = false;
     _wifi_disconnected_since_ms = 0;
   }
 #endif
@@ -1222,10 +1295,10 @@ size_t DeviceMeshActions::scanWifiNetworks(char ssids[][33], int16_t rssis[], si
   }
   esp_wifi_clear_ap_list();  // release the driver's scan results, otherwise each scan leaks
 
-  // The raw path can return ap_num > 0 but zero records on some core/IDF combinations. Fall back
-  // to the Arduino API (which uses its own scan config) instead of showing an empty list.
+  // Only fall back to Arduino WiFi.scanNetworks() when the IDF scan or record fetch failed,
+  // never when the scan succeeded with zero visible APs (avoiding a redundant ~3 s second scan).
   int fallback_n = -1;
-  if (out == 0) {
+  if (err != ESP_OK || (ap_num > 0 && records_err != ESP_OK)) {
     fallback_n = WiFi.scanNetworks(false, true, false, 120);
     if (fallback_n > 0) {
       for (int16_t i = 0; i < fallback_n; ++i) {
@@ -1496,6 +1569,8 @@ bool DeviceMeshActions::runCliCommand(const char* cmd, char* out_reply, size_t m
     handled = true;
   } else if (strcmp(cmd, "clear history") == 0) {
     _store.clearMessages();
+    remove("/spiffs/faro_msgs.bin");
+    remove("/spiffs/faro_msgs.bin.tmp");
     snprintf(reply, sizeof(reply), "> Message history cleared (also on flash)");
     handled = true;
   } else if (strncmp(cmd, "set name ", 9) == 0) {
@@ -1975,7 +2050,13 @@ bool DeviceMeshActions::exportSettingsToSd(bool overwrite) {
   }
 
   // Also write human-readable JSON summary to /faro/settings.json (overwriting existing)
-  char json_buf[640] = {0};
+  char node_json[2 * sizeof(snap.node_name)];
+  char ssid_json[2 * sizeof(snap.wifi_ssid)];
+  char scope_json[2 * sizeof(snap.active_scope_name)];
+  AppStore::jsonEscape(snap.node_name, node_json, sizeof(node_json));
+  AppStore::jsonEscape(snap.wifi_ssid, ssid_json, sizeof(ssid_json));
+  AppStore::jsonEscape(snap.active_scope_name, scope_json, sizeof(scope_json));
+  char json_buf[768] = {0};
   int jlen = snprintf(json_buf, sizeof(json_buf),
                       "{\n"
                       "  \"node_name\": \"%s\",\n"
@@ -2000,7 +2081,7 @@ bool DeviceMeshActions::exportSettingsToSd(bool overwrite) {
                       "  \"tz_offset_hours\": %d,\n"
                       "  \"scope\": \"%s\"\n"
                       "}\n",
-                      snap.node_name, double(snap.radio.freq_mhz), double(snap.radio.bw_khz),
+                      node_json, double(snap.radio.freq_mhz), double(snap.radio.bw_khz),
                       unsigned(snap.radio.sf), unsigned(snap.radio.cr), int(snap.radio.tx_power_dbm),
                       snap.radio.rx_boosted_gain ? "true" : "false",
                       snap.radio.client_repeat ? "true" : "false",
@@ -2009,11 +2090,12 @@ bool DeviceMeshActions::exportSettingsToSd(bool overwrite) {
                       unsigned(snap.loc_policy),
                       snap.auto_add_contacts ? "true" : "false", unsigned(snap.auto_add_max_hops),
                       unsigned(snap.multi_acks), snap.cad_enabled ? "true" : "false",
-                      snap.wifi_ssid,
+                      ssid_json,
                       snap.gps_enabled ? "true" : "false",
-                      int(snap.tz_offset_hours), snap.active_scope_name);
+                      int(snap.tz_offset_hours), scope_json);
   if (jlen > 0) {
-    _sd->writeFile("/faro/settings.json", reinterpret_cast<const uint8_t*>(json_buf), size_t(jlen));
+    const size_t write_len = size_t(jlen) < sizeof(json_buf) ? size_t(jlen) : sizeof(json_buf) - 1;
+    _sd->writeFile("/faro/settings.json", reinterpret_cast<const uint8_t*>(json_buf), write_len);
   }
 
   st.sd_mounted = _sd->isMounted();
@@ -2085,7 +2167,9 @@ bool DeviceMeshActions::importSettingsFromSd() {
   setDefaultScope(snap.active_scope_name);
 
   auto& up = _store.uiPrefs();
-  up.language = static_cast<Language>(snap.language % 4);
+  up.language = (snap.language <= uint8_t(Language::PL))
+                    ? static_cast<Language>(snap.language)
+                    : Language::EN;
   up.outdoor_high_contrast = snap.outdoor_high_contrast;
   up.screen_timeout_secs = snap.screen_timeout_secs;
   up.quiet_mode = snap.quiet_mode;

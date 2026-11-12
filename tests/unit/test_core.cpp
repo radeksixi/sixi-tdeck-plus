@@ -202,8 +202,27 @@ void testAppStoreMessagingAndRetries() {
   dm_in.timestamp = 1700000100;
   store.applyEvent(dm_in, 2000);
   assert(store.totalUnreadDm() == 1);
+  assert(c->out_path_len == 2);  // Incoming DM must not wipe a known outbound path
   store.clearContactUnread(disc.pub_key);
   assert(store.totalUnreadDm() == 0);
+
+  // Multi-byte path hashes (2-byte x 3 hops -> path_len == 67 >= 64) preserved and logged as 3 hops
+  MeshEvent disc2{};
+  disc2.type = MeshEventType::ContactDiscovered;
+  disc2.pub_key[0] = 0xCC;
+  disc2.pub_key[1] = 0xDD;
+  strncpy(disc2.name, "TwoBytePeer", sizeof(disc2.name) - 1);
+  disc2.role = NodeRole::Repeater;
+  disc2.path_len = ContactRecord::encodePathLen(2, 3);  // 67
+  const uint8_t mb_path[6] = {0x10, 0x11, 0x20, 0x21, 0x30, 0x31};
+  memcpy(disc2.path, mb_path, sizeof(mb_path));
+  disc2.snr_q4 = 24;
+  disc2.rssi = -82;
+  store.applyEvent(disc2, 1500);
+  const ContactRecord* c2 = store.findContactByPubKey(disc2.pub_key);
+  assert(c2 != nullptr && c2->pathHops() == 3 && c2->pathByteLen() == 6);
+  assert(memcmp(c2->out_path, mb_path, 6) == 0);
+  assert(store.packetLogAt(store.packetLogCount() - 1).hops == 3);
 
   // Outgoing DM ACK matching
   MessageRecord out1{};
@@ -561,6 +580,19 @@ void testPathEncodingAndTrace() {
   n = AppStore::buildTracePath(p2, ContactRecord::encodePathLen(2, 1), target, true, path, sizeof(path), flags);
   const uint8_t want3[6] = {0xA1, 0xA2, 0x7E, 0x7F, 0xA1, 0xA2};
   assert(n == 6 && flags == 1 && memcmp(path, want3, 6) == 0);
+  // 3-byte hashes with hops=32 (32*3 = 96 > 64): must clamp at 21 hops (63 B) and never read past out_path[64]
+  struct GuardedBuf {
+    uint8_t out_path[64];
+    uint8_t canary[32];
+  } gb{};
+  memset(gb.out_path, 0x42, sizeof(gb.out_path));
+  memset(gb.canary, 0xEE, sizeof(gb.canary));
+  uint8_t big_trace[128] = {0};
+  n = AppStore::buildTracePath(gb.out_path, ContactRecord::encodePathLen(3, 32), nullptr, false,
+                               big_trace, sizeof(big_trace), flags);
+  assert(n > 0);
+  for (size_t i = 0; i < n; ++i) assert(big_trace[i] == 0x42);  // 0xEE canary was never read
+
   // Nothing to trace: unknown path, or a direct neighbour that does not forward
   assert(AppStore::buildTracePath(p1, 0xFF, target, true, path, sizeof(path), flags) == 0);
   assert(AppStore::buildTracePath(p1, ContactRecord::encodePathLen(1, 0), target, false, path, sizeof(path), flags) == 0);
@@ -727,11 +759,49 @@ void testPersistence() {
   b.clearMessages();
   assert(b.messageCount() == 0);
 
-  // Desktop console: both parts in one file
+  // Desktop console: both parts in one file, including Language::PL
+  a.uiPrefs().language = Language::PL;
   assert(a.saveToFile(ui_path));
   AppStore d;
   d.upsertContact(c);
-  assert(d.loadFromFile(ui_path) && d.messageCount() == 2);
+  assert(d.loadFromFile(ui_path) && d.messageCount() == 2 && d.uiPrefs().language == Language::PL);
+
+  // Truncated and bit-flipped message files must be rejected without wiping existing messages
+  const bool saved_msgs_ok = a.saveMessages(msg_path);
+  assert(saved_msgs_ok);
+  {
+    FILE* mf = fopen(msg_path, "rb");
+    assert(mf != nullptr);
+    uint8_t raw[1024];
+    const size_t rlen = fread(raw, 1, sizeof(raw), mf);
+    fclose(mf);
+    assert(rlen > 24);
+
+    // 1) Truncated halfway: d keeps its 2 messages
+    FILE* tf = fopen(msg_path, "wb");
+    fwrite(raw, 1, rlen - 10, tf);
+    fclose(tf);
+    assert(!d.loadMessages(msg_path) && d.messageCount() == 2);
+
+    // 2) Bit-flipped payload byte (CRC32 mismatch): rejected, d still keeps its 2 messages
+    uint8_t flipped[1024];
+    memcpy(flipped, raw, rlen);
+    flipped[rlen / 2] ^= 0x01;
+    tf = fopen(msg_path, "wb");
+    fwrite(flipped, 1, rlen, tf);
+    fclose(tf);
+    assert(!d.loadMessages(msg_path) && d.messageCount() == 2);
+
+    // 3) Valid .tmp fallback when primary file is corrupt
+    char msg_tmp[96];
+    snprintf(msg_tmp, sizeof(msg_tmp), "%s.tmp", msg_path);
+    tf = fopen(msg_tmp, "wb");
+    fwrite(raw, 1, rlen, tf);
+    fclose(tf);
+    AppStore rec;
+    assert(rec.loadMessages(msg_path) && rec.messageCount() == 2);
+  }
+
   remove(ui_path);
   remove(msg_path);
   printf("[PASS] testPersistence\n");
@@ -749,6 +819,18 @@ void testTrackRecording() {
   const size_t cap = sizeof(s.gpsTrack().points) / sizeof(s.gpsTrack().points[0]);
   assert(s.gpsTrack().point_count <= cap && s.gpsTrack().point_count > cap / 2);
   assert(s.gpsTrack().points[0].timestamp == 1);  // thinning keeps the start
+
+  strncpy(s.gpsTrack().name, "A&B <Ridge> \"1\"", sizeof(s.gpsTrack().name) - 1);
+  char gpx_saved[64] = {0};
+  assert(s.exportGpsTrackGpx("/tmp/faro_test_escape.gpx", gpx_saved, sizeof(gpx_saved)));
+  FILE* gf = fopen("/tmp/faro_test_escape.gpx", "rb");
+  assert(gf != nullptr);
+  char gpx_txt[512] = {0};
+  fread(gpx_txt, 1, sizeof(gpx_txt) - 1, gf);
+  fclose(gf);
+  remove("/tmp/faro_test_escape.gpx");
+  assert(strstr(gpx_txt, "<name>A&amp;B &lt;Ridge&gt; &quot;1&quot;</name>") != nullptr);
+
   printf("[PASS] testTrackRecording\n");
 }
 

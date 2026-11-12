@@ -531,6 +531,7 @@ void App::buildContactDetailView(lv_obj_t* parent) {
     Theme::styleTouchButton(shr_btn, p.success, lv_color_hex(0xFFFFFF));
     lv_obj_add_event_cb(shr_btn, [](lv_event_t* e) {
       auto* self = static_cast<App*>(lv_event_get_user_data(e));
+      if (!self || self->_selected_contact_idx >= AppStore::kMaxContacts) return;
       const auto& peer = self->_store.contacts()[self->_selected_contact_idx];
       self->_actions.shareContactZeroHop(peer.pub_key);
     }, LV_EVENT_CLICKED, this);
@@ -545,6 +546,7 @@ void App::buildContactDetailView(lv_obj_t* parent) {
     Theme::styleTouchButton(uri_btn, p.surface_alt, p.accent);
     lv_obj_add_event_cb(uri_btn, [](lv_event_t* e) {
       auto* self = static_cast<App*>(lv_event_get_user_data(e));
+      if (!self || self->_selected_contact_idx >= AppStore::kMaxContacts) return;
       const auto& peer = self->_store.contacts()[self->_selected_contact_idx];
       char out_u[220] = {0};
       self->_actions.exportContactUri(peer.pub_key, out_u, sizeof(out_u));
@@ -577,6 +579,7 @@ void App::buildContactDetailView(lv_obj_t* parent) {
     Theme::styleTouchButton(del_btn, p.danger, lv_color_hex(0xFFFFFF));
     lv_obj_add_event_cb(del_btn, [](lv_event_t* e) {
       auto* self = static_cast<App*>(lv_event_get_user_data(e));
+      if (!self || self->_selected_contact_idx >= AppStore::kMaxContacts) return;
       const auto& peer = self->_store.contacts()[self->_selected_contact_idx];
       self->_actions.removeContact(peer.pub_key);
       self->showScreen(ScreenId::Contacts);
@@ -640,7 +643,7 @@ void App::buildContactDetailView(lv_obj_t* parent) {
     Theme::styleTouchButton(sp_btn, p.accent, lv_color_hex(0xFFFFFF));
     lv_obj_add_event_cb(sp_btn, [](lv_event_t* e) {
       auto* self = static_cast<App*>(lv_event_get_user_data(e));
-      if (!self || !self->_compose_ta) return;
+      if (!self || !self->_compose_ta || self->_selected_contact_idx >= AppStore::kMaxContacts) return;
       const char* txt = lv_textarea_get_text(self->_compose_ta);
       ContactRecord peer = self->_store.contacts()[self->_selected_contact_idx];
       // One hop per comma-separated hex group; its length sets the path hash size (1-3 bytes)
@@ -692,6 +695,7 @@ void App::buildContactDetailView(lv_obj_t* parent) {
     Theme::styleTouchButton(b_fld, p.warning, lv_color_hex(0xFFFFFF));
     lv_obj_add_event_cb(b_fld, [](lv_event_t* e) {
       auto* self = static_cast<App*>(lv_event_get_user_data(e));
+      if (!self || self->_selected_contact_idx >= AppStore::kMaxContacts) return;
       const auto& peer = self->_store.contacts()[self->_selected_contact_idx];
       self->_actions.resetContactPath(peer.pub_key);
       self->renderBody();
@@ -707,6 +711,7 @@ void App::buildContactDetailView(lv_obj_t* parent) {
     Theme::styleTouchButton(b_dir, p.success, lv_color_hex(0xFFFFFF));
     lv_obj_add_event_cb(b_dir, [](lv_event_t* e) {
       auto* self = static_cast<App*>(lv_event_get_user_data(e));
+      if (!self || self->_selected_contact_idx >= AppStore::kMaxContacts) return;
       ContactRecord peer = self->_store.contacts()[self->_selected_contact_idx];
       peer.out_path_len = 0;  // direct neighbour, no repeater in between
       self->_actions.addOrUpdateContact(peer);
@@ -723,6 +728,7 @@ void App::buildContactDetailView(lv_obj_t* parent) {
     Theme::styleTouchButton(b_adv, p.surface_alt, p.accent);
     lv_obj_add_event_cb(b_adv, [](lv_event_t* e) {
       auto* self = static_cast<App*>(lv_event_get_user_data(e));
+      if (!self || self->_selected_contact_idx >= AppStore::kMaxContacts) return;
       const auto& peer = self->_store.contacts()[self->_selected_contact_idx];
       self->_actions.useLastAdvertPath(peer.pub_key);
       self->renderBody();
@@ -738,6 +744,7 @@ void App::buildContactDetailView(lv_obj_t* parent) {
     Theme::styleTouchButton(b_fnd, p.surface_alt, p.text_primary);
     lv_obj_add_event_cb(b_fnd, [](lv_event_t* e) {
       auto* self = static_cast<App*>(lv_event_get_user_data(e));
+      if (!self || self->_selected_contact_idx >= AppStore::kMaxContacts) return;
       const auto& peer = self->_store.contacts()[self->_selected_contact_idx];
       self->_actions.findPath(peer.pub_key);
     }, LV_EVENT_CLICKED, this);
@@ -752,6 +759,7 @@ void App::buildContactDetailView(lv_obj_t* parent) {
     Theme::styleTouchButton(b_trc, p.accent, lv_color_hex(0xFFFFFF));
     lv_obj_add_event_cb(b_trc, [](lv_event_t* e) {
       auto* self = static_cast<App*>(lv_event_get_user_data(e));
+      if (!self || self->_selected_contact_idx >= AppStore::kMaxContacts) return;
       const auto& peer = self->_store.contacts()[self->_selected_contact_idx];
       uint32_t tag = 0;
       if (self->_actions.sendTracePath(peer.pub_key, tag)) {
@@ -795,6 +803,7 @@ void App::buildContactDetailView(lv_obj_t* parent) {
       s_tgctx[b] = {this, b};
       lv_obj_add_event_cb(tb, [](lv_event_t* e) {
         auto* ctx = static_cast<TagToggleCtx*>(lv_event_get_user_data(e));
+        if (!ctx || !ctx->app || ctx->app->_selected_contact_idx >= AppStore::kMaxContacts) return;
         auto& peer = ctx->app->_store.contactsMutable()[ctx->app->_selected_contact_idx];
         peer.tag_mask ^= uint8_t(1U << ctx->bit);
         ctx->app->renderBody();
@@ -819,7 +828,7 @@ void App::buildContactDetailView(lv_obj_t* parent) {
     Theme::styleTouchButton(sn_btn, p.accent, lv_color_hex(0xFFFFFF));
     lv_obj_add_event_cb(sn_btn, [](lv_event_t* e) {
       auto* self = static_cast<App*>(lv_event_get_user_data(e));
-      if (!self || !self->_compose_ta) return;
+      if (!self || !self->_compose_ta || self->_selected_contact_idx >= AppStore::kMaxContacts) return;
       auto& peer = self->_store.contactsMutable()[self->_selected_contact_idx];
       strncpy(peer.notes, lv_textarea_get_text(self->_compose_ta), sizeof(peer.notes) - 1);
       self->renderBody();
@@ -857,6 +866,7 @@ void App::buildContactDetailView(lv_obj_t* parent) {
   Theme::styleTouchButton(lg_btn, p.success, lv_color_hex(0xFFFFFF));
   lv_obj_add_event_cb(lg_btn, [](lv_event_t* e) {
     auto* self = static_cast<App*>(lv_event_get_user_data(e));
+    if (!self || self->_selected_contact_idx >= AppStore::kMaxContacts) return;
     const auto& peer = self->_store.contacts()[self->_selected_contact_idx];
     const char* pwd = (self->_compose_ta && lv_textarea_get_text(self->_compose_ta)[0])
                           ? lv_textarea_get_text(self->_compose_ta)
@@ -875,6 +885,7 @@ void App::buildContactDetailView(lv_obj_t* parent) {
   Theme::styleTouchButton(cli_btn, p.accent, lv_color_hex(0xFFFFFF));
   lv_obj_add_event_cb(cli_btn, [](lv_event_t* e) {
     auto* self = static_cast<App*>(lv_event_get_user_data(e));
+    if (!self || self->_selected_contact_idx >= AppStore::kMaxContacts) return;
     const auto& peer = self->_store.contacts()[self->_selected_contact_idx];
     const char* cmd = (self->_compose_ta && lv_textarea_get_text(self->_compose_ta)[0])
                           ? lv_textarea_get_text(self->_compose_ta)
@@ -899,6 +910,7 @@ void App::buildContactDetailView(lv_obj_t* parent) {
     s_abctx[b] = {this, b};
     lv_obj_add_event_cb(ab, [](lv_event_t* e) {
       auto* ctx = static_cast<AdmBtnCtx*>(lv_event_get_user_data(e));
+      if (!ctx || !ctx->app || ctx->app->_selected_contact_idx >= AppStore::kMaxContacts) return;
       App* a = ctx->app;
       const auto& peer = a->_store.contacts()[a->_selected_contact_idx];
       if (ctx->idx == 0) a->_actions.requestRemoteStatus(peer.pub_key);

@@ -134,6 +134,7 @@ private:
   void*    _wifi_setup_server = nullptr;     // WiFiServer* (kept as void* to avoid header deps)
   bool     _wifi_setup_active = false;
   uint32_t _wifi_setup_started_ms = 0;
+  char     _wifi_setup_csrf[17] = {0};
   uint32_t _reboot_at_ms = 0;  // pending restart after an identity import
   static constexpr size_t kDutySlots = 61;  // 60 one-minute intervals
   uint32_t _duty_ms[kDutySlots] = {};

@@ -27,7 +27,7 @@ extern "C" unsigned lodepng_decode32(unsigned char** out, unsigned* w, unsigned*
 #include "core/OfflineTileReader.h"
 #include "platform/DeviceMeshActions.h"
 
-// Chat history on flash: not on headless boards (no UI) and not in the Sixi edition (operator data in RAM only)
+// Chat history on flash: disabled on headless boards (no UI)
 #if !defined(FARO_PERSIST_MESSAGES)
 #if   defined(FARO_HEADLESS)
 #define FARO_PERSIST_MESSAGES 0
@@ -198,13 +198,14 @@ public:
 
 #if !defined(FARO_HEADLESS)
   FaroDisplay* display = nullptr;
-  hal::TouchGT911 touch;
-  hal::KeyboardBBQ10 keyboard;
-  hal::Trackball trackball;
 #if defined(THINKNODE_M9)
   hal::KeypadM9 m9_keys;
   uint32_t m9_lv_key = 0;
   bool m9_lv_pressed = false;
+#else
+  hal::TouchGT911 touch;
+  hal::KeyboardBBQ10 keyboard;
+  hal::Trackball trackball;
 #endif
   SdTileFs tile_fs{sd};
   core::OfflineTileReader tiles{&tile_fs};
@@ -212,6 +213,7 @@ public:
 
   uint16_t buf1[320 * 24];
   uint32_t last_input_ms = 0;
+  uint32_t last_sleep_indev_ms = 0;
   uint8_t pending_key = 0;
   bool dimmed = false;
   bool screen_off = false;
@@ -258,10 +260,12 @@ public:
     if (display) {
       display->reinitSpi();
     }
+#if !defined(THINKNODE_M9)
     touch.begin();
     keyboard.begin();
     keyboard.setBacklight(store.uiPrefs().kb_backlight);
     trackball.begin();
+#endif
 
     lv_init();
     // PNG tiles decode to ARGB8888 through the image-cache draw buffer handlers. Point those at
@@ -283,6 +287,7 @@ public:
       lv_display_flush_ready(disp_obj);
     });
 
+#if !defined(THINKNODE_M9)
     lv_indev_t* indev_touch = lv_indev_create();
     lv_indev_set_type(indev_touch, LV_INDEV_TYPE_POINTER);
     lv_indev_set_user_data(indev_touch, this);
@@ -305,9 +310,11 @@ public:
         data->state = LV_INDEV_STATE_RELEASED;
       }
     });
+#endif
 
     app.begin();
 
+#if !defined(THINKNODE_M9)
     // Register Trackball as LVGL Encoder input device bound to app.inputGroup() (ADR-018)
     lv_indev_t* indev_enc = lv_indev_create();
     lv_indev_set_type(indev_enc, LV_INDEV_TYPE_ENCODER);
@@ -350,11 +357,12 @@ public:
       data->key = 0;
       data->state = LV_INDEV_STATE_RELEASED;
     });
-
-#if defined(THINKNODE_M9)
-    // ThinkNode M9: the keypad is the only input (no touch, no trackball). Page keys move the focus,
-    // enter clicks (or sends while typing), home/back return to Home, menu opens Settings.
+#else
+    // ThinkNode M9: the keypad is the only input (no touch, no trackball). Page keys move the focus
+    // (or step up/down inside an open dropdown), enter clicks (or sends while typing), home/back
+    // return to Home, menu opens Settings.
     m9_keys.begin();
+    m9_keys.setBacklight(store.uiPrefs().kb_backlight > 0);
     lv_indev_t* indev_m9 = lv_indev_create();
     lv_indev_set_type(indev_m9, LV_INDEV_TYPE_KEYPAD);
     lv_indev_set_user_data(indev_m9, this);
@@ -373,15 +381,21 @@ public:
       const uint8_t k = self->m9_keys.readKey(millis());
       if (k == 0) return;
       self->wakeDisplay();
+      lv_obj_t* focused = self->app.inputGroup() ? lv_group_get_focused(self->app.inputGroup()) : nullptr;
+      const bool dd_open = focused && lv_obj_check_type(focused, &lv_dropdown_class) &&
+                           lv_dropdown_is_open(focused);
       uint32_t lv_key = 0;
       switch (k) {
-        case 0x81: lv_key = LV_KEY_PREV; break;
-        case 0x85: lv_key = LV_KEY_NEXT; break;
+        case 0x81: lv_key = dd_open ? LV_KEY_UP : LV_KEY_PREV; break;
+        case 0x85: lv_key = dd_open ? LV_KEY_DOWN : LV_KEY_NEXT; break;
         case 0x0D:
-          if (self->app.isTyping()) self->app.onKeyPress('\r');
+          if (!dd_open && self->app.isTyping()) self->app.onKeyPress('\r');
           else lv_key = LV_KEY_ENTER;
           break;
-        case 0x82: case 0x86: case 0x1B: self->app.onKeyPress(27); break;
+        case 0x82: case 0x86: case 0x1B:
+          if (dd_open) lv_key = LV_KEY_ESC;
+          else self->app.onKeyPress(27);
+          break;
         case 0x83: self->app.openSettings(); break;
         default: self->app.onKeyPress(k); break;
       }
@@ -394,29 +408,6 @@ public:
     });
 #endif
     last_input_ms = millis();
-    if (sd.isMounted() && sd.hasDiscoveredTiles()) {
-      const uint32_t t_decode = millis();
-      const uint16_t* decoded = tiles.getDecodedTile(sd.defaultTileZ(), sd.defaultTileX(),
-                                                     sd.defaultTileY());
-      Serial.printf("[FARO-SD] Tile decode self-test (%d/%d/%d): ok=%d in %u ms (heap=%u, psram=%u)\n",
-                    sd.defaultTileZ(), sd.defaultTileX(), sd.defaultTileY(), int(decoded != nullptr),
-                    unsigned(millis() - t_decode), unsigned(ESP.getFreeHeap()),
-                    unsigned(ESP.getFreePsram()));
-      uint16_t* bench = static_cast<uint16_t*>(ps_malloc(308U * 138U * sizeof(uint16_t)));
-      double c_lat = 0.0, c_lon = 0.0;
-      int c_z = -1;
-      if (bench && tiles.getDefaultTileCenter(c_lat, c_lon, c_z)) {
-        const uint32_t t_render = millis();
-        tiles.renderViewportRgb565(c_lat, c_lon, c_z, bench, 308, 138, false);
-        const uint32_t render_ms = millis() - t_render;
-        const uint32_t t_render_cached = millis();
-        tiles.renderViewportRgb565(c_lat, c_lon, c_z, bench, 308, 138, false);
-        Serial.printf("[FARO-SD] Map render 308x138: first=%u ms, cached=%u ms (sd_tiles=%d)\n",
-                      unsigned(render_ms), unsigned(millis() - t_render_cached),
-                      int(tiles.lastRenderUsedSdTiles()));
-      }
-      if (bench) free(bench);
-    }
 #else
     (void)disp;
 #endif
@@ -449,7 +440,11 @@ public:
       // then wake the panel (SLPOUT) and the keyboard backlight.
       display->setBacklight(store.uiPrefs().brightness_pct);
       display->turnOn();
+#if defined(THINKNODE_M9)
+      m9_keys.setBacklight(store.uiPrefs().kb_backlight > 0);
+#else
       keyboard.setBacklight(store.uiPrefs().kb_backlight);
+#endif
       dimmed = false;
       screen_off = false;
       if (lv_screen_active()) {
@@ -524,6 +519,7 @@ public:
 #if !defined(FARO_HEADLESS)
     app.tick(t0);
 
+#if !defined(THINKNODE_M9)
     // Hardware fast-wake check when dimmed or off (Trackball click GPIO 0).
     // Note: Do NOT check digitalRead(16) == LOW here because GT911 TP_INT sits LOW when idle
     // and would immediately wake the display on the very next loop tick; indev_touch already
@@ -533,12 +529,17 @@ public:
         wakeDisplay();
       }
     }
+#endif
 
     // Idle screen dim after screen_timeout_secs
     uint32_t timeout_ms = uint32_t(store.uiPrefs().screen_timeout_secs) * 1000U;
     if (!dimmed && !screen_off && timeout_ms > 0 && (t0 - last_input_ms > timeout_ms)) {
       if (display) display->setBacklight(10);
+#if defined(THINKNODE_M9)
+      m9_keys.setBacklight(false);
+#else
       keyboard.setBacklight(0);
+#endif
       dimmed = true;
     }
 
@@ -547,18 +548,36 @@ public:
     uint32_t screen_off_ms = timeout_ms + 15000U;
     if (dimmed && !screen_off && timeout_ms > 0 && (t0 - last_input_ms > screen_off_ms)) {
       if (display) display->turnOff();
+#if defined(THINKNODE_M9)
+      m9_keys.setBacklight(false);
+#else
       keyboard.setBacklight(0);
+#endif
       screen_off = true;
     }
 
     applyCpuPolicy();
-    lv_timer_handler();
+    if (screen_off) {
+      // Skip display/animation redraws while panel is asleep; poll wake inputs every 30 ms.
+      if (t0 - last_sleep_indev_ms >= 30U) {
+        last_sleep_indev_ms = t0;
+        for (lv_indev_t* indev = lv_indev_get_next(nullptr); indev != nullptr;
+             indev = lv_indev_get_next(indev)) {
+          lv_indev_read(indev);
+        }
+      }
+    } else {
+      lv_timer_handler();
+    }
 #endif
 
     uint32_t dt = millis() - t0;
     store.status().last_loop_ms = uint16_t(dt > 0xFFFF ? 0xFFFF : dt);
     if (store.status().last_loop_ms > store.status().max_loop_ms) {
       store.status().max_loop_ms = store.status().last_loop_ms;
+    }
+    if (dt == 0) {
+      delay(1);
     }
   }
 };
@@ -607,14 +626,15 @@ void UITask::onMessageRecv(mesh::Packet* pkt, const ContactInfo& from, uint8_t t
 
 
   // Never log message content (privacy): metadata only
-  Serial.printf("[FARO-RX] DM (%uh, %u B)\n", unsigned(pkt ? pkt->path_len : 0), unsigned(strlen(text)));
+  const uint8_t dm_hops = pkt ? pkt->getPathHashCount() : 0;
+  Serial.printf("[FARO-RX] DM (%uh, %u B)\n", unsigned(dm_hops), unsigned(strlen(text)));
   faro::core::MeshEvent ev{};
   ev.type = faro::core::MeshEventType::DirectMessageRecv;
   ev.timestamp = sender_timestamp;
   ev.txt_type = txt_type;
   ev.snr_q4 = pkt ? int8_t(pkt->_snr) : 0;
   ev.rssi = int16_t(radio_driver.getLastRSSI());
-  ev.hops = pkt ? pkt->path_len : 0;
+  ev.hops = dm_hops;
   memcpy(ev.pub_key, from.id.pub_key, 32);
   strncpy(ev.name, from.name, sizeof(ev.name) - 1);
   ev.role = static_cast<faro::core::NodeRole>(from.type);
@@ -630,7 +650,7 @@ void UITask::onChannelMessageRecv(mesh::Packet* pkt, ChannelDetails& channel_det
   ev.timestamp = the_mesh.getRTCClock()->getCurrentTime();
   ev.snr_q4 = pkt ? int8_t(pkt->_snr) : 0;
   ev.rssi = int16_t(radio_driver.getLastRSSI());
-  ev.hops = pkt ? pkt->path_len : 0;
+  ev.hops = pkt ? pkt->getPathHashCount() : 0;
   int idx = the_mesh.findChannelIdx(channel_details.channel);
   ev.channel_index = idx >= 0 ? uint8_t(idx) : 0;
   strncpy(ev.name, channel_details.name[0] ? channel_details.name : "Public", sizeof(ev.name) - 1);
@@ -651,19 +671,23 @@ void UITask::onQueueSizeChanged(int msgcount) {
 
 void UITask::onDiscoveredContact(ContactInfo& contact, bool is_new, uint8_t path_len,
                                  const uint8_t* path) {
+  (void)path;
   if (!_ctrl) return;
   faro::core::MeshEvent ev{};
   ev.type = faro::core::MeshEventType::ContactDiscovered;
   ev.timestamp = contact.last_advert_timestamp;
   ev.is_new_contact = is_new;
+  ev.snr_q4 = int8_t(radio_driver.getLastSNR() * 4);
+  ev.rssi = int16_t(radio_driver.getLastRSSI());
+  ev.hops = faro::core::ContactRecord::decodePathHops(path_len);
   memcpy(ev.pub_key, contact.id.pub_key, 32);
   strncpy(ev.name, contact.name, sizeof(ev.name) - 1);
   ev.role = static_cast<faro::core::NodeRole>(contact.type);
   ev.lat_e6 = contact.gps_lat;
   ev.lon_e6 = contact.gps_lon;
-  ev.path_len = path_len;
-  if (path && path_len < 64) {
-    memcpy(ev.path, path, path_len);
+  ev.path_len = contact.out_path_len;
+  if (contact.out_path_len != OUT_PATH_UNKNOWN) {
+    memcpy(ev.path, contact.out_path, faro::core::ContactRecord::decodePathByteLen(contact.out_path_len));
   }
   _ctrl->bus.push(ev);
 }

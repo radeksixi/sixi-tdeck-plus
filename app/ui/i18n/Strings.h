@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// app/ui/i18n/Strings.h — Compile-time multilingual string catalog (EN, IT, DE, FR) (ADR-019)
+// app/ui/i18n/Strings.h — Compile-time multilingual string catalog (EN, IT, DE, FR, PL) (ADR-019)
 #pragma once
 
 #include "core/Types.h"

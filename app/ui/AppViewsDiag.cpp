@@ -539,12 +539,21 @@ void App::buildBootWizardView(lv_obj_t* parent) {
   const RadioRegion& reg = _store.regionInfo();
   const auto& r = _store.radio();
   lv_label_set_text_fmt(info,
-                        "1. %s: %s (%s) | Node: %s\n"
+                        "1. %s: %s (%s) [tap]\n"
                         "2. Region: %s (max %d dBm)\n"
                         "3. Select Frequency / Preset:",
                         tr(StrId::LanguageLabel, lang), languageName(lang), languageCode(lang),
-                        _store.status().node_name, reg.name,
+                        reg.name,
                         int(RegionPolicy::maxConductedDbm(reg)));
+  lv_obj_add_flag(info, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_add_event_cb(info, [](lv_event_t* e) {
+    auto* self = static_cast<App*>(lv_event_get_user_data(e));
+    if (!self) return;
+    const uint8_t next = uint8_t((uint8_t(self->_store.uiPrefs().language) + 1U) % 5U);
+    self->_store.uiPrefs().language = static_cast<Language>(next);
+    self->_store.bumpVersion();
+    self->showScreen(ScreenId::BootWizard);
+  }, LV_EVENT_CLICKED, this);
 
   // Frequency / Preset Drop-Down List directly in BootWizard
   char dd_opts[512] = {0};
@@ -598,7 +607,7 @@ void App::buildBootWizardView(lv_obj_t* parent) {
           self->_actions.setPathHashMode(pr.path_hash_bytes);
         }
         self->updateStatusBar();
-        self->renderBody();
+        self->_defer_render = true;
       }
     }
   }, LV_EVENT_ALL, this);

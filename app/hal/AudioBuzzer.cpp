@@ -15,6 +15,7 @@ namespace faro::hal {
 namespace {
 #if defined(ARDUINO) && defined(LILYGO_TDECK)
 bool s_i2s_ready = false;
+bool s_i2s_running = false;
 #endif
 
 struct ToneStep {
@@ -49,8 +50,19 @@ void startTone(uint16_t freq_hz, uint16_t ms) {
   }
 #elif defined(ARDUINO) && defined(LILYGO_TDECK)
   if (!s_i2s_ready) return;
+  if (freq_hz == 0 || ms == 0) {
+    if (s_i2s_running) {
+      i2s_zero_dma_buffer(I2S_NUM_0);
+      i2s_stop(I2S_NUM_0);
+      s_i2s_running = false;
+    }
+    return;
+  }
+  if (!s_i2s_running) {
+    i2s_start(I2S_NUM_0);
+    s_i2s_running = true;
+  }
   i2s_zero_dma_buffer(I2S_NUM_0);
-  if (freq_hz == 0 || ms == 0) return;
   uint32_t total_frames = (8000U * uint32_t(ms)) / 1000U;
   if (total_frames > 1600U) total_frames = 1600U;
   int16_t chunk[128];  // 64 stereo frames
@@ -109,6 +121,8 @@ void AudioBuzzer::begin() {
       pins.data_in_num = I2S_PIN_NO_CHANGE;
       i2s_set_pin(I2S_NUM_0, &pins);
       i2s_zero_dma_buffer(I2S_NUM_0);
+      i2s_stop(I2S_NUM_0);
+      s_i2s_running = false;
       s_i2s_ready = true;
     }
   }

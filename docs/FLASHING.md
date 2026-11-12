@@ -1,11 +1,11 @@
 # Flashing Faro
 
-Release files (GitHub release `v0.11.5`):
+Release files (GitHub release `v0.12.1`):
 
 | File | Flash at | Use |
 |---|---|---|
-| `faro-<board>-0.11.5-merged.bin` | `0x0` | First install or recovery: bootloader, partition table, `boot_app0`, app |
-| `faro-<board>-0.11.5-app.bin` | `0x10000` | Update of an existing Faro or MeshCore companion install; keeps identity, contacts, channels |
+| `faro-<board>-0.12.1-merged.bin` | `0x0` | First install or recovery: bootloader, partition table, `boot_app0`, app |
+| `faro-<board>-0.12.1-app.bin` | `0x10000` | Update of an existing Faro or MeshCore companion install; keeps identity, contacts, channels |
 | `SHA256SUMS` | — | Check first: `sha256sum -c SHA256SUMS` |
 
 `<board>` is `tdeck` (T-Deck and T-Deck Plus), `tdeck-max`, `thinknode-m9`, `tbeam-supreme` or `heltec-v3`.
@@ -31,21 +31,28 @@ drawn (the rest collapse into a "+N more" badge) and the GPS/SD status moved off
 bottom HUD button. 0.11.4 fixes the 2048 board not repainting after a move (LVGL 9.3 coalesces
 style-only changes; `update2048` now forces a full-screen invalidation) and adds a pixel-level
 regression test for it. 0.11.5 adds a letter alias for the 2048 easter egg: type `tile` (the T-Deck
-digit layer is awkward; `2048` still works where a number row exists).
+digit layer is awkward; `2048` still works where a number row exists). 0.12.1 adds CRC32-validated
+SPIFFS persistence with `.tmp` recovery, 2/3-byte repeater path-hash decoding, hardened `POST`+CSRF
+phone Wi-Fi setup (full 63-char WPA2 passphrases), Polish (`PL`) UI localisation alongside
+`EN/IT/DE/FR`, ThinkNode M9 keypad focus/dropdown/backlight fixes, lower idle power (paused LVGL SPI
+flushes when the screen is off, stopped I2S clocks when silent, faster cold boot), desktop console
+non-blocking TCP/UTF-8 resilience, and same-origin Web Flasher hosting on GitHub Pages.
 
 ## Web flasher (browser, no command line)
 
-You can flash from Chrome or Edge without installing anything, using an
+You can flash from Chrome or Edge without installing anything on the
+**[Faro Web Flasher](https://radeksixi.github.io/sixi-tdeck-plus/)** or any
 [ESP Web Tools](https://esphome.github.io/esp-web-tools/) flasher. Put the device in download mode
 (off → hold the trackball → on → release; the screen stays dark), connect USB-C, then in the flasher pick
 **ESP32-S3** and flash the **merged** image at `0x0` (first install) or the **app** image at `0x10000` (update).
 
+- **[Faro Web Flasher](https://radeksixi.github.io/sixi-tdeck-plus/)** — 1-click USB flashing for all 5 boards.
 - **[espflasher.app](https://espflasher.app/)** — load the downloaded `-merged.bin` file, or paste a URL.
 - Browser flashing by URL needs `Access-Control-Allow-Origin`. The release assets on `github.com` redirect to a
   host without it, so for URL-based flashing use the CORS-enabled copy on GitHub Pages:
 
   ```
-  https://radeksixi.github.io/sixi-tdeck-plus/firmware/v0.11.5/faro-tdeck-0.11.5-merged.bin
+  https://radeksixi.github.io/sixi-tdeck-plus/firmware/v0.12.1/faro-tdeck-0.12.1-merged.bin
   ```
 
   (same pattern for the other boards and the `-app.bin`; the Mesh America configurator catalog also lists Faro).
@@ -68,9 +75,9 @@ Switch the device off, connect USB-C, hold the trackball pressed, switch on, rel
 
 ```bash
 # first install
-esptool --chip esp32s3 --port /dev/ttyACM0 --baud 921600 write-flash 0x0 faro-tdeck-0.11.5-merged.bin
+esptool --chip esp32s3 --port /dev/ttyACM0 --baud 921600 write-flash 0x0 faro-tdeck-0.12.1-merged.bin
 # update, keeps data
-esptool --chip esp32s3 --port /dev/ttyACM0 --baud 921600 write-flash 0x10000 faro-tdeck-0.11.5-app.bin
+esptool --chip esp32s3 --port /dev/ttyACM0 --baud 921600 write-flash 0x10000 faro-tdeck-0.12.1-app.bin
 ```
 
 On Windows the port is `COMx`, on macOS `/dev/cu.usbmodem*`. If 921600 baud fails, use 460800.

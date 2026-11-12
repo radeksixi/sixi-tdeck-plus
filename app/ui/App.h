@@ -53,8 +53,10 @@ public:
 
   // Keyboard & shortcut handler (for BBQ10 physical keyboard and simulator hotkeys)
   void onKeyPress(uint8_t key);
-  // True while a text field is on screen (keys go into it)
-  bool isTyping() const { return _compose_ta != nullptr; }
+  // UTF-8 text input handler (SDL_TEXTINPUT / clipboard paste)
+  void onTextInput(const char* utf8);
+  // True while a text field is focused on screen (keys go into it)
+  bool isTyping() const;
   void openSettings() {
     _settings_hub = true;
     showScreen(ScreenId::Settings);
@@ -181,7 +183,9 @@ private:
   char      _draft_text[160] = {0};
   uint32_t  _draft_key = 0xFFFFFFFFU;
   uint32_t  _compose_key = 0xFFFFFFFFU;   // view that created _compose_ta
+  uint32_t  _view_key = 0xFFFFFFFFU;      // view key for scroll/focus preservation
   bool      _draft_focused = false;
+  bool      _defer_render = false;
   uint32_t  draftKey() const;
   // Two-tap confirmation for dangerous actions (key export/import): returns true on the 2nd tap
   int       _armed_action = -1;

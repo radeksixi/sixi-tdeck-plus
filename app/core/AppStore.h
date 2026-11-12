@@ -133,7 +133,7 @@ public:
   RadioConfig& radio() { return _radio; }
   const RadioConfig& radio() const { return _radio; }
 
-  // Radio region (sets the allowed sub-bands, power and duty limits). The Sixi edition stays on EU 868.
+  // Radio region (sets the allowed sub-bands, power and duty limits).
   RadioRegionId region() const { return _region; }
   const RadioRegion& regionInfo() const { return RegionPolicy::get(_region); }
   bool setRegion(RadioRegionId id);
@@ -225,6 +225,8 @@ public:
 
   static void bytesToHex(const uint8_t* bytes, size_t len, char* out_hex, size_t max_len);
   static bool hexToBytes(const char* hex, uint8_t* out_bytes, size_t expected_len);
+  static void jsonEscape(const char* in, char* out, size_t max_len);
+  static void xmlEscape(const char* in, char* out, size_t max_len);
 
 private:
   friend struct AppStoreCodec;  // persistence (AppStore.cpp)

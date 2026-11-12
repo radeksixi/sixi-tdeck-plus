@@ -2,6 +2,7 @@
 // console/main_console.cpp — Native SDL2 + LVGL 9 PC Desktop Console (faro-console) (ADR-016)
 #include <lvgl.h>
 #include <png.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -107,6 +108,9 @@ void printUsage(const char* argv0) {
 }  // namespace
 
 int main(int argc, char** argv) {
+#ifdef SIGPIPE
+  signal(SIGPIPE, SIG_IGN);
+#endif
   const char* tcp_target = nullptr;
   const char* usb_target = nullptr;
   const char* psk_hex = nullptr;
@@ -270,8 +274,7 @@ int main(int argc, char** argv) {
         mouse_x = int16_t(e.motion.x);
         mouse_y = int16_t(e.motion.y);
       } else if (e.type == SDL_TEXTINPUT) {
-        char c = e.text.text[0];
-        if (c >= 32 && c < 127) app.onKeyPress(uint8_t(c));
+        app.onTextInput(e.text.text);
       } else if (e.type == SDL_KEYDOWN) {
         SDL_Keycode sym = e.key.keysym.sym;
         uint16_t mod = e.key.keysym.mod;
@@ -283,9 +286,8 @@ int main(int argc, char** argv) {
             char* cb = SDL_GetClipboardText();
             if (cb) {
               strncpy(store.uiPrefs().clipboard, cb, sizeof(store.uiPrefs().clipboard) - 1);
-              for (const char* p = cb; *p; ++p) {
-                if (*p >= 32 && *p < 127) app.onKeyPress(uint8_t(*p));
-              }
+              store.uiPrefs().clipboard[sizeof(store.uiPrefs().clipboard) - 1] = '\0';
+              app.onTextInput(cb);
               SDL_free(cb);
             }
           }
@@ -297,6 +299,12 @@ int main(int argc, char** argv) {
         else if (sym == SDLK_BACKSPACE) app.onKeyPress('\b');
         else if (sym == SDLK_RETURN || sym == SDLK_KP_ENTER) app.onKeyPress('\r');
         else if (sym == SDLK_TAB) app.onKeyPress('\t');
+        else if (!app.isTyping()) {
+          if (sym == SDLK_UP) app.onKeyPress('w');
+          else if (sym == SDLK_DOWN) app.onKeyPress('s');
+          else if (sym == SDLK_LEFT) app.onKeyPress('a');
+          else if (sym == SDLK_RIGHT) app.onKeyPress('d');
+        }
       }
     }
 

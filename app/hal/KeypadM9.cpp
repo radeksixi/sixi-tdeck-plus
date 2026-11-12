@@ -15,13 +15,19 @@ void IRAM_ATTR onKeyIrq() { g_key_irq = true; }  // KB_INT idles low and pulses 
 bool KeypadM9::begin() {
   pinMode(kPinInt, INPUT);
   pinMode(kPinBacklight, OUTPUT);
-  digitalWrite(kPinBacklight, HIGH);
   Wire1.begin(kPinSda, kPinScl, 100000);
   Wire1.beginTransmission(kI2cAddr);
   _available = (Wire1.endTransmission() == 0);
+  digitalWrite(kPinBacklight, _available ? HIGH : LOW);
   if (_available) attachInterrupt(digitalPinToInterrupt(kPinInt), onKeyIrq, RISING);
   Serial.printf("[FARO] M9 keypad (0x%02X): %s\n", kI2cAddr, _available ? "found" : "not found");
   return _available;
+}
+
+void KeypadM9::setBacklight(bool on) {
+  if (_available) {
+    digitalWrite(kPinBacklight, on ? HIGH : LOW);
+  }
 }
 
 uint8_t KeypadM9::readKey(uint32_t now_ms) {

@@ -112,7 +112,7 @@ public:
   CompanionClientMeshActions(faro::core::AppStore& store, faro::core::MeshEventBus& bus);
   ~CompanionClientMeshActions() override;
 
-  // Connect over TCP (e.g. 192.168.4.1:5000). token16 is used by the Sixi edition only.
+  // Connect over TCP (e.g. 192.168.4.1:5000).
   bool connectTcp(const char* host, uint16_t port, const uint8_t* token16 = nullptr);
 
   // Connect over USB CDC serial port (e.g. /dev/ttyACM0 @ 115200)
@@ -188,19 +188,27 @@ public:
   bool exportGpsTrackGpx(char* out_path, size_t max_len) override;
 
 private:
+  static constexpr uint16_t kMaxCompanionFrame = 1024;
+
   bool sendFrame(const uint8_t* payload, size_t len);
   bool recvFrameBlocking(std::vector<uint8_t>& out, int timeout_ms);
+  bool waitForResponse(std::vector<uint8_t>& out, uint8_t expected_code, int timeout_ms);
   void handleIncomingFrame(const uint8_t* data, size_t len);
 
   faro::core::AppStore& _store;
   faro::core::MeshEventBus& _bus;
   int _fd = -1;
+  bool _is_socket = false;
   std::vector<uint8_t> _rx_buf;
   uint32_t _last_sent_crc = 0x1000;
+  bool _last_sent_flood = false;
+  bool _got_sent_resp = false;
   uint32_t _trace_seq = 1;
   faro::core::RemoteRequestKind _binary_kind = faro::core::RemoteRequestKind::None;  // last CMD_SEND_BINARY_REQ
   char _last_host[64] = {0};
   uint16_t _last_port = 5000;
+  bool _has_last_psk = false;
+  uint8_t _last_psk[16] = {0};
   uint32_t _last_reconnect_ms = 0;
 };
 

@@ -51,12 +51,16 @@ int main() {
   app.begin();
   assert(app.inputGroup() != nullptr);
 
-  // Verify all 15 screens render across EN, IT, DE, FR and Outdoor mode
+  // Verify all 15 screens render across EN, IT, DE, FR, PL and Outdoor mode
+  assert(strcmp(faro::ui::i18n::languageCode(faro::core::Language::PL), "PL") == 0);
+  assert(strcmp(faro::ui::i18n::languageName(faro::core::Language::PL), "Polski") == 0);
+  assert(strcmp(faro::ui::i18n::tr(faro::ui::i18n::StrId::TabChannels, faro::core::Language::PL), "Kanały") == 0);
   static const faro::core::Language kTestLangs[] = {
     faro::core::Language::EN,
     faro::core::Language::IT,
     faro::core::Language::DE,
-    faro::core::Language::FR
+    faro::core::Language::FR,
+    faro::core::Language::PL
   };
   for (auto lang : kTestLangs) {
     store.uiPrefs().language = lang;
@@ -275,7 +279,7 @@ int main() {
 
   ping_ev.type = faro::core::MeshEventType::DirectMessageRecv;
   memcpy(ping_ev.pub_key, store.contacts()[0].pub_key, 32);
-  strncpy(ping_ev.name, store.contacts()[0].name, sizeof(ping_ev.name) - 1);
+  snprintf(ping_ev.name, sizeof(ping_ev.name), "%s", store.contacts()[0].name);
   store.applyEvent(ping_ev, 11200);
   app.tick(11300);
   assert(store.uiPrefs().bot_replies_sent == 1);
@@ -306,7 +310,7 @@ int main() {
   faro::core::MeshEvent adv_ev{};
   adv_ev.type = faro::core::MeshEventType::ContactDiscovered;
   memcpy(adv_ev.pub_key, store.contacts()[0].pub_key, 32);
-  strncpy(adv_ev.name, store.contacts()[0].name, sizeof(adv_ev.name) - 1);
+  snprintf(adv_ev.name, sizeof(adv_ev.name), "%s", store.contacts()[0].name);
   adv_ev.role = store.contacts()[0].role;
   adv_ev.lat_e6 = 46150000;
   adv_ev.lon_e6 = 7850000;
@@ -388,6 +392,98 @@ int main() {
   lv_timer_handler();
   lv_refr_now(disp);
 
-  printf("[PASS] test_ui_sim (all screens x 4 languages)\n");
+  // P4.1: Focus-aware App::isTyping() and Enter clicking focused non-compose button
+  {
+    app.openChatWithContact(0);
+    assert(app.isTyping());  // compose textarea is initially focused
+
+    bool extra_clicked = false;
+    lv_obj_t* extra_btn = lv_button_create(lv_screen_active());
+    lv_obj_add_event_cb(extra_btn, [](lv_event_t* e) {
+      auto* flag = static_cast<bool*>(lv_event_get_user_data(e));
+      if (flag) *flag = true;
+    }, LV_EVENT_CLICKED, &extra_clicked);
+    lv_group_add_obj(app.inputGroup(), extra_btn);
+    lv_group_focus_obj(extra_btn);
+    assert(!app.isTyping());
+
+    const size_t msgs_before_click = store.messageCount();
+    app.onKeyPress('\r');
+    assert(extra_clicked);
+    assert(store.messageCount() == msgs_before_click);
+    lv_obj_delete(extra_btn);
+  }
+
+  // P4.2a: 16-bit contact index draftKey() isolation (> 255 does not alias index & 0xFF)
+  {
+    while (store.contactCount() < 260) {
+      faro::core::ContactRecord c{};
+      const size_t n = store.contactCount();
+      c.pub_key[0] = uint8_t(n & 0xFF);
+      c.pub_key[1] = uint8_t((n >> 8) & 0xFF);
+      for (int b = 2; b < 32; ++b) c.pub_key[b] = uint8_t(0x30 + b);
+      snprintf(c.name, sizeof(c.name), "Bulk%03u", unsigned(n));
+      c.role = faro::core::NodeRole::ChatNode;
+      c.valid = true;
+      const auto* inserted = store.upsertContact(c);
+      assert(inserted != nullptr);
+    }
+    app.openChatWithContact(1);
+    app.onTextInput("DraftOne");
+    store.bumpVersion();
+    app.tick(120000U);  // same contact 1: draft must survive refresh
+    const size_t m0 = store.messageCount();
+    app.openChatWithContact(257);  // 257 & 0xFF == 1, must NOT inherit contact 1's draft!
+    app.onKeyPress('\r');
+    assert(store.messageCount() == m0);
+  }
+
+  // P4.2b: 2048 board & score survive background store.bumpVersion() refreshes even when corners empty
+  {
+    app.showScreen(faro::ui::ScreenId::Game2048);
+    app.onKeyPress('n');
+    for (int mv = 0; mv < 24; ++mv) {
+      app.onKeyPress("dwas"[mv % 4]);
+    }
+    auto findScoreText = [&](char* out, size_t max_len) {
+      out[0] = '\0';
+      std::function<void(lv_obj_t*)> walk = [&](lv_obj_t* o) {
+        for (uint32_t i = 0; i < lv_obj_get_child_count(o); ++i) {
+          lv_obj_t* ch = lv_obj_get_child(o, i);
+          if (lv_obj_get_class(ch) == &lv_label_class) {
+            const char* t = lv_label_get_text(ch);
+            if (t && strncmp(t, "Score ", 6) == 0) {
+              strncpy(out, t, max_len - 1);
+              out[max_len - 1] = '\0';
+            }
+          }
+          walk(ch);
+        }
+      };
+      walk(lv_screen_active());
+    };
+    char score_before[64] = {0};
+    findScoreText(score_before, sizeof(score_before));
+    assert(strncmp(score_before, "Score 0 ", 8) != 0);
+    for (int r = 0; r < 5; ++r) {
+      store.bumpVersion();
+      app.tick(125000U + uint32_t(r) * 500U);
+    }
+    char score_after[64] = {0};
+    findScoreText(score_after, sizeof(score_after));
+    assert(strcmp(score_before, score_after) == 0);
+  }
+
+  // P4.3: SD settings export/import preserves Language::PL
+  {
+    store.uiPrefs().language = faro::core::Language::PL;
+    assert(actions.exportSettingsToSd(true));
+    store.uiPrefs().language = faro::core::Language::EN;
+    assert(actions.importSettingsFromSd());
+    assert(store.uiPrefs().language == faro::core::Language::PL);
+    store.uiPrefs().language = faro::core::Language::EN;
+  }
+
+  printf("[PASS] test_ui_sim (all screens x 5 languages + P4 UI/focus/2048 checks)\n");
   return 0;
 }

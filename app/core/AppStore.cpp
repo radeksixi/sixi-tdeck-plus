@@ -4,6 +4,9 @@
 #include "GeoMath.h"
 #include <stdio.h>
 #include <string.h>
+#if !defined(_WIN32)
+#include <unistd.h>
+#endif
 
 namespace faro::core {
 
@@ -19,8 +22,15 @@ static constexpr const char* kDefaultCanned[] = {
   "Stand by — checking radio link"
 };
 
-// Escape a string for a JSON string literal (quotes, backslashes, control characters).
-void jsonEscape(const char* in, char* out, size_t max_len) {
+int hexNibble(char c) {
+  if (c >= '0' && c <= '9') return c - '0';
+  if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+  if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+  return -1;
+}
+}  // namespace
+
+void AppStore::jsonEscape(const char* in, char* out, size_t max_len) {
   if (!out || max_len == 0) return;
   size_t o = 0;
   for (const char* p = in ? in : ""; *p && o + 1 < max_len; ++p) {
@@ -39,13 +49,31 @@ void jsonEscape(const char* in, char* out, size_t max_len) {
   out[o] = '\0';
 }
 
-int hexNibble(char c) {
-  if (c >= '0' && c <= '9') return c - '0';
-  if (c >= 'a' && c <= 'f') return c - 'a' + 10;
-  if (c >= 'A' && c <= 'F') return c - 'A' + 10;
-  return -1;
+void AppStore::xmlEscape(const char* in, char* out, size_t max_len) {
+  if (!out || max_len == 0) return;
+  size_t o = 0;
+  for (const char* p = in ? in : ""; *p && o + 1 < max_len; ++p) {
+    const unsigned char ch = static_cast<unsigned char>(*p);
+    const char* rep = nullptr;
+    switch (ch) {
+      case '&':  rep = "&amp;";  break;
+      case '<':  rep = "&lt;";   break;
+      case '>':  rep = "&gt;";   break;
+      case '"':  rep = "&quot;"; break;
+      case '\'': rep = "&apos;"; break;
+      default:   break;
+    }
+    if (rep) {
+      const size_t rlen = strlen(rep);
+      if (o + rlen >= max_len) break;
+      memcpy(out + o, rep, rlen);
+      o += rlen;
+    } else if (ch >= 0x20 || ch == '\t' || ch == '\n') {
+      out[o++] = char(ch);
+    }
+  }
+  out[o] = '\0';
 }
-}  // namespace
 
 AppStore::AppStore() {
   _repeat_roam.setEnabled(true);
@@ -108,17 +136,28 @@ void AppStore::applyEvent(const MeshEvent& ev, uint32_t now_ms) {
         ++_version;
         break;
       }
-      ContactRecord c{};
-      memcpy(c.pub_key, ev.pub_key, 32);
-      strncpy(c.name, ev.name[0] ? ev.name : "Peer", sizeof(c.name) - 1);
-      c.role = ev.role;
-      c.last_advert_ts = ev.timestamp;
-      c.lastmod_ts = ev.timestamp;
-      c.last_snr_q4 = ev.snr_q4;
-      c.last_rssi = ev.rssi;
-      c.valid = true;
-      ContactRecord* stored = upsertContact(c);
-      if (stored) stored->unread_count++;
+      ContactRecord* stored = findContactByPubKeyMutable(ev.pub_key);
+      if (stored) {
+        if (ev.name[0]) strncpy(stored->name, ev.name, sizeof(stored->name) - 1);
+        if (ev.role != NodeRole::Unknown) stored->role = ev.role;
+        stored->last_advert_ts = ev.timestamp;
+        stored->lastmod_ts = ev.timestamp;
+        stored->last_snr_q4 = ev.snr_q4;
+        stored->last_rssi = ev.rssi;
+        stored->unread_count++;
+      } else {
+        ContactRecord c{};
+        memcpy(c.pub_key, ev.pub_key, 32);
+        strncpy(c.name, ev.name[0] ? ev.name : "Peer", sizeof(c.name) - 1);
+        c.role = ev.role;
+        c.last_advert_ts = ev.timestamp;
+        c.lastmod_ts = ev.timestamp;
+        c.last_snr_q4 = ev.snr_q4;
+        c.last_rssi = ev.rssi;
+        c.valid = true;
+        stored = upsertContact(c);
+        if (stored) stored->unread_count++;
+      }
 
       MessageRecord m{};
       m.is_channel = false;
@@ -149,7 +188,7 @@ void AppStore::applyEvent(const MeshEvent& ev, uint32_t now_ms) {
         pl.hops = ev.hops;
         pl.len_bytes = uint16_t(16 + strlen(ev.text));
         strncpy(pl.type_label, (ev.txt_type == 1) ? "CLI_DM" : "TXT_MSG", sizeof(pl.type_label) - 1);
-        snprintf(pl.summary, sizeof(pl.summary), "from %s [%uh] %.24s",
+        snprintf(pl.summary, sizeof(pl.summary), "from %.20s [%uh] %.24s",
                  ev.name[0] ? ev.name : "Peer", unsigned(ev.hops), ev.text);
         pl.valid = true;
         appendPacketLog(pl);
@@ -231,9 +270,12 @@ void AppStore::applyEvent(const MeshEvent& ev, uint32_t now_ms) {
       memcpy(c.pub_key, ev.pub_key, 32);
       strncpy(c.name, ev.name[0] ? ev.name : "Node", sizeof(c.name) - 1);
       c.role = ev.role;
-      c.out_path_len = ev.path_len;
-      if (ev.path_len < 64) {
-        memcpy(c.out_path, ev.path, ev.path_len);
+      if (ev.path_len != 0xFF) {
+        c.out_path_len = ev.path_len;
+        memcpy(c.out_path, ev.path, c.pathByteLen());
+      } else if (const ContactRecord* prev = findContactByPubKey(ev.pub_key); prev && prev->hasPath()) {
+        c.out_path_len = prev->out_path_len;
+        memcpy(c.out_path, prev->out_path, prev->pathByteLen());
       }
       c.last_advert_ts = ev.timestamp;
       c.lastmod_ts = ev.timestamp;
@@ -278,7 +320,7 @@ void AppStore::applyEvent(const MeshEvent& ev, uint32_t now_ms) {
         pl.timestamp_ms = now_ms;
         pl.snr_q4 = ev.snr_q4;
         pl.rssi = ev.rssi;
-        pl.hops = (ev.path_len == 0xFF) ? 0 : ev.path_len;
+        pl.hops = ev.hops ? ev.hops : ContactRecord::decodePathHops(ev.path_len);
         pl.len_bytes = 104;
         strncpy(pl.type_label, "ADVERT", sizeof(pl.type_label) - 1);
         snprintf(pl.summary, sizeof(pl.summary), "%02X%02X %s [%uh]",
@@ -398,6 +440,10 @@ bool AppStore::tickMessageTimeouts(uint32_t now_ms) {
     if (!m.valid || !m.outgoing || m.is_channel) continue;
     if (m.delivery_state == DeliveryState::DeliveredAck ||
         m.delivery_state == DeliveryState::Failed) {
+      continue;
+    }
+    if (m.sent_ms == 0) {
+      m.sent_ms = now_ms ? now_ms : 1;
       continue;
     }
     if (now_ms < m.sent_ms || (now_ms - m.sent_ms) < kDirectAckTimeoutMs) {
@@ -891,13 +937,15 @@ bool AppStore::exportGpsTrackGpx(const char* filepath, char* out_saved_path, siz
   FILE* fp = fopen(target, "w");
   if (!fp) return false;
 
+  char track_name_xml[6 * sizeof(_gps_track.name)];
+  xmlEscape(_gps_track.name[0] ? _gps_track.name : "Faro-Alpine-Track", track_name_xml, sizeof(track_name_xml));
   fprintf(fp,
           "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
           "<gpx version=\"1.1\" creator=\"Faro MeshCore UI\" xmlns=\"http://www.topografix.com/GPX/1/1\">\n"
           "  <trk>\n"
           "    <name>%s</name>\n"
           "    <trkseg>\n",
-          _gps_track.name[0] ? _gps_track.name : "Faro-Alpine-Track");
+          track_name_xml);
   for (size_t i = 0; i < _gps_track.point_count && i < 64; ++i) {
     const auto& pt = _gps_track.points[i];
     fprintf(fp,
@@ -1006,7 +1054,7 @@ bool AppStore::exportContactsJson(const char* filepath, char* out_saved_path, si
             "%s    {\"name\": \"%s\", \"pub_key\": \"%s\", \"role\": %u, \"hops\": %u, \"lat\": %.6f, \"lon\": %.6f, \"uri\": \"%s\"}",
             first ? "" : ",\n",
             name_json, pub_hex, unsigned(c.role),
-            c.out_path_len == 0xFF ? 0U : unsigned(c.out_path_len),
+            unsigned(c.pathHops()),
             c.latDeg(), c.lonDeg(), uri_json);
     first = false;
   }
@@ -1033,7 +1081,10 @@ size_t AppStore::buildTracePath(const uint8_t* out_path, uint8_t out_path_len, c
   flags = sz == 2 ? 1 : 0;
   uint8_t entries[33][2] = {};
   uint8_t n = 0;
-  for (uint8_t h = 0; h < hops && n < 32 && out_path; ++h, ++n) memcpy(entries[n], &out_path[h * hash_size], sz);
+  for (uint8_t h = 0; h < hops && n < 32 && out_path &&
+                      size_t(h + 1) * hash_size <= sizeof(ContactRecord::out_path); ++h, ++n) {
+    memcpy(entries[n], &out_path[size_t(h) * hash_size], sz);
+  }
   if (target_repeats && target_pub && n < 33) memcpy(entries[n++], target_pub, sz);
   if (n == 0) return 0;  // direct neighbour that does not forward
   size_t len = 0;
@@ -1246,16 +1297,30 @@ namespace {
 constexpr uint32_t kUiMagic = 0x31495546U;    // "FUI1"
 constexpr uint32_t kMsgMagic = 0x31534D46U;   // "FMS1"
 constexpr uint32_t kComboMagic = 0x34524146U; // "FAR4"
-constexpr uint16_t kUiVersion = 2;  // v2 adds cpu_profile; v1 files still load
-constexpr uint16_t kMsgVersion = 1;
+constexpr uint16_t kUiVersion = 3;  // v3 adds CRC32 trailer; v1/v2 files still load
+constexpr uint16_t kMsgVersion = 2; // v2 adds CRC32 trailer; v1 files still load
+
+uint32_t crc32Update(uint32_t crc, const uint8_t* data, size_t len) {
+  for (size_t i = 0; i < len; ++i) {
+    crc ^= data[i];
+    for (int b = 0; b < 8; ++b) {
+      crc = (crc >> 1) ^ (0xEDB88320U & (~(crc & 1U) + 1U));
+    }
+  }
+  return crc;
+}
 
 // Writes to a file, or only hashes (FNV-1a) when no file is given
 struct Out {
   FILE* f = nullptr;
   uint32_t hash = 0x811C9DC5U;
+  uint32_t crc = 0xFFFFFFFFU;
   bool ok = true;
+  void resetCrc() { crc = 0xFFFFFFFFU; }
+  uint32_t crc32() const { return ~crc; }
   void bytes(const void* p, size_t n) {
     const uint8_t* b = static_cast<const uint8_t*>(p);
+    if (n) crc = crc32Update(crc, b, n);
     if (f) {
       if (n && fwrite(b, 1, n, f) != n) ok = false;
     } else {
@@ -1281,12 +1346,17 @@ struct Out {
 
 struct In {
   FILE* f = nullptr;
+  uint32_t crc = 0xFFFFFFFFU;
   bool ok = true;
+  void resetCrc() { crc = 0xFFFFFFFFU; }
+  uint32_t crc32() const { return ~crc; }
   void bytes(void* p, size_t n) {
     if (!ok || (n && fread(p, 1, n, f) != n)) {
       ok = false;
       memset(p, 0, n);
+      return;
     }
+    if (n) crc = crc32Update(crc, static_cast<const uint8_t*>(p), n);
   }
   uint8_t u8() { uint8_t v = 0; bytes(&v, 1); return v; }
   uint16_t u16() { uint8_t b[2]; bytes(b, 2); return uint16_t(b[0] | (b[1] << 8)); }
@@ -1309,7 +1379,7 @@ bool contactHasMeta(const ContactRecord& c) {
   return c.valid && (c.tag_mask != 0 || c.favourite || c.muted || c.notes[0] != '\0');
 }
 
-// Writes <path>.tmp and renames it over <path> (SPIFFS cannot rename over an existing file)
+// Writes <path>.tmp, flushes + fsyncs, and renames it over <path> (SPIFFS cannot rename over an existing file)
 template <typename Fn>
 bool writeAtomically(const char* path, Fn&& body) {
   if (!path || !path[0]) return false;
@@ -1320,8 +1390,16 @@ bool writeAtomically(const char* path, Fn&& body) {
   Out o;
   o.f = fp;
   body(o);
-  const bool ok = o.ok && fflush(fp) == 0;
-  fclose(fp);
+  bool ok = o.ok && fflush(fp) == 0;
+#if !defined(_WIN32)
+  if (ok) {
+    const int fd = fileno(fp);
+    if (fd >= 0 && fsync(fd) != 0) {
+      // Some virtual filesystems do not implement fsync (EINVAL/ENOSYS); treat EIO/ENOSPC as hard failure
+    }
+  }
+#endif
+  if (fclose(fp) != 0) ok = false;
   if (!ok) {
     remove(tmp);
     return false;
@@ -1330,19 +1408,42 @@ bool writeAtomically(const char* path, Fn&& body) {
   return rename(tmp, path) == 0;
 }
 
-// Opens <path>, or the temp file a power cut left behind
-FILE* openForRead(const char* path) {
-  if (!path || !path[0]) return nullptr;
-  if (FILE* fp = fopen(path, "rb")) return fp;
+// Validates a candidate file first (commit=false) before mutating AppStore; falls back to <path>.tmp on power-cut corruption
+template <typename Fn>
+bool loadValidated(const char* path, Fn&& reader) {
+  if (!path || !path[0]) return false;
+  auto tryOne = [&](const char* candidate) -> bool {
+    FILE* fp = fopen(candidate, "rb");
+    if (!fp) return false;
+    In dry;
+    dry.f = fp;
+    bool ok = reader(dry, false) && dry.ok;
+    if (ok) {
+      if (fseek(fp, 0, SEEK_SET) != 0) {
+        ok = false;
+      } else {
+        In commit_in;
+        commit_in.f = fp;
+        ok = reader(commit_in, true) && commit_in.ok;
+      }
+    }
+    fclose(fp);
+    return ok;
+  };
+  if (tryOne(path)) return true;
   char tmp[96];
-  if (snprintf(tmp, sizeof(tmp), "%s.tmp", path) >= int(sizeof(tmp))) return nullptr;
-  return fopen(tmp, "rb");
+  if (snprintf(tmp, sizeof(tmp), "%s.tmp", path) >= int(sizeof(tmp))) return false;
+  if (!tryOne(tmp)) return false;
+  remove(path);
+  (void)rename(tmp, path);
+  return true;
 }
 }  // namespace
 
 // Defined as members-in-disguise: they need the private fields
 struct AppStoreCodec {
   static void writeUi(const AppStore& s, Out& o) {
+    o.resetCrc();
     const UiPrefs& up = s._ui_prefs;
     o.u32(kUiMagic);
     o.u16(kUiVersion);
@@ -1388,16 +1489,19 @@ struct AppStoreCodec {
       o.u8(c.muted);
       o.str(c.notes, sizeof(c.notes));
     }
+    const uint32_t crc = o.crc32();
+    o.u32(crc);
   }
 
-  static bool readUi(AppStore& s, In& in) {
+  static bool readUi(AppStore& s, In& in, bool commit = true) {
+    in.resetCrc();
     if (in.u32() != kUiMagic || !in.ok) return false;
     const uint16_t file_version = in.u16();
-    if (file_version < 1 || file_version > kUiVersion) return false;
+    if (file_version < 1 || file_version > kUiVersion || !in.ok) return false;
     UiPrefs up = s._ui_prefs;
     const uint8_t region = in.u8();
     const uint8_t lang = in.u8();
-    up.language = Language(lang <= uint8_t(Language::FR) ? lang : 0);
+    up.language = Language(lang <= uint8_t(Language::PL) ? lang : 0);
     up.outdoor_high_contrast = in.u8() != 0;
     up.brightness_pct = in.u8();
     up.kb_backlight = in.u8();
@@ -1421,14 +1525,18 @@ struct AppStoreCodec {
     up.deadman_remaining_secs = kDeadmanSecs[up.deadman_mode];
     up.deadman_triggered = false;
     up.search_active = false;
-    s._ui_prefs = up;
-    if (RegionPolicy::isKnown(region)) s.setRegion(RadioRegionId(region));
+    if (commit) {
+      s._ui_prefs = up;
+      if (RegionPolicy::isKnown(region)) s.setRegion(RadioRegionId(region));
+    }
 
     const uint8_t n_mute = in.u8();
     for (uint8_t k = 0; k < n_mute && in.ok; ++k) {
       const uint8_t idx = in.u8();
-      for (size_t i = 0; i < AppStore::kMaxChannels; ++i) {
-        if (s._channels[i].valid && s._channels[i].index == idx) s._channels[i].muted = true;
+      if (commit && in.ok) {
+        for (size_t i = 0; i < AppStore::kMaxChannels; ++i) {
+          if (s._channels[i].valid && s._channels[i].index == idx) s._channels[i].muted = true;
+        }
       }
     }
     const uint16_t n_meta = in.u16();
@@ -1440,20 +1548,29 @@ struct AppStoreCodec {
       const bool muted = in.u8() != 0;
       char notes[64];
       in.str(notes, sizeof(notes));
-      if (!in.ok) break;
+      if (!in.ok) return false;
       // Contacts that no longer exist in MeshCore are dropped, never recreated
-      if (ContactRecord* c = s.findContactByPubKeyMutable(pub)) {
-        c->tag_mask = tags;
-        c->favourite = fav;
-        c->muted = muted;
-        memcpy(c->notes, notes, sizeof(c->notes));
+      if (commit) {
+        if (ContactRecord* c = s.findContactByPubKeyMutable(pub)) {
+          c->tag_mask = tags;
+          c->favourite = fav;
+          c->muted = muted;
+          memcpy(c->notes, notes, sizeof(c->notes));
+        }
       }
     }
-    ++s._version;
+    if (!in.ok) return false;
+    if (file_version >= 3) {
+      const uint32_t expected_crc = in.crc32();
+      const uint32_t stored_crc = in.u32();
+      if (!in.ok || stored_crc != expected_crc) return false;
+    }
+    if (commit) ++s._version;
     return true;
   }
 
   static void writeMessages(const AppStore& s, Out& o) {
+    o.resetCrc();
     o.u32(kMsgMagic);
     o.u16(kMsgVersion);
     o.u32(s._next_msg_id);
@@ -1475,14 +1592,19 @@ struct AppStoreCodec {
       o.str(m.sender_name, sizeof(m.sender_name));
       o.str(m.text, sizeof(m.text));
     }
+    const uint32_t crc = o.crc32();
+    o.u32(crc);
   }
 
-  static bool readMessages(AppStore& s, In& in) {
-    if (in.u32() != kMsgMagic || in.u16() != kMsgVersion || !in.ok) return false;
+  static bool readMessages(AppStore& s, In& in, bool commit = true) {
+    in.resetCrc();
+    if (in.u32() != kMsgMagic || !in.ok) return false;
+    const uint16_t file_version = in.u16();
+    if (file_version < 1 || file_version > kMsgVersion || !in.ok) return false;
     const uint32_t next_id = in.u32();
     const uint16_t count = in.u16();
     if (!in.ok) return false;
-    s.clearMessages();
+    if (commit) s.clearMessages();
     for (uint16_t k = 0; k < count && in.ok; ++k) {
       MessageRecord m{};
       m.id = in.u32();
@@ -1502,21 +1624,31 @@ struct AppStoreCodec {
       m.rssi = int16_t(in.u16());
       in.str(m.sender_name, sizeof(m.sender_name));
       in.str(m.text, sizeof(m.text));
-      if (!in.ok) break;
-      // An ACK cannot arrive for a send from before the restart: such messages count as not delivered
-      if (m.outgoing && (m.delivery_state == DeliveryState::Queued || m.delivery_state == DeliveryState::SentDirect ||
-                         m.delivery_state == DeliveryState::SentFlood)) {
-        m.delivery_state = DeliveryState::Failed;
+      if (!in.ok) return false;
+      if (commit) {
+        // An ACK cannot arrive for a send from before the restart: such messages count as not delivered
+        if (m.outgoing && (m.delivery_state == DeliveryState::Queued || m.delivery_state == DeliveryState::SentDirect ||
+                           m.delivery_state == DeliveryState::SentFlood)) {
+          m.delivery_state = DeliveryState::Failed;
+        }
+        m.valid = true;
+        // Keep the stored id: unread / bot bookkeeping refers to it
+        s._messages[s._msg_head] = m;
+        s._msg_head = (s._msg_head + 1) % AppStore::kMaxMessages;
+        if (s._msg_count < AppStore::kMaxMessages) ++s._msg_count;
+        if (m.id >= s._next_msg_id) s._next_msg_id = m.id + 1;
       }
-      m.valid = true;
-      // Keep the stored id: unread / bot bookkeeping refers to it
-      s._messages[s._msg_head] = m;
-      s._msg_head = (s._msg_head + 1) % AppStore::kMaxMessages;
-      if (s._msg_count < AppStore::kMaxMessages) ++s._msg_count;
-      if (m.id >= s._next_msg_id) s._next_msg_id = m.id + 1;
     }
-    if (next_id > s._next_msg_id) s._next_msg_id = next_id;
-    ++s._version;
+    if (!in.ok) return false;
+    if (file_version >= 2) {
+      const uint32_t expected_crc = in.crc32();
+      const uint32_t stored_crc = in.u32();
+      if (!in.ok || stored_crc != expected_crc) return false;
+    }
+    if (commit) {
+      if (next_id > s._next_msg_id) s._next_msg_id = next_id;
+      ++s._version;
+    }
     return true;
   }
 };
@@ -1526,13 +1658,7 @@ bool AppStore::saveUiState(const char* filepath) const {
 }
 
 bool AppStore::loadUiState(const char* filepath) {
-  FILE* fp = openForRead(filepath);
-  if (!fp) return false;
-  In in;
-  in.f = fp;
-  const bool ok = AppStoreCodec::readUi(*this, in);
-  fclose(fp);
-  return ok;
+  return loadValidated(filepath, [this](In& in, bool commit) { return AppStoreCodec::readUi(*this, in, commit); });
 }
 
 bool AppStore::saveMessages(const char* filepath) const {
@@ -1540,13 +1666,7 @@ bool AppStore::saveMessages(const char* filepath) const {
 }
 
 bool AppStore::loadMessages(const char* filepath) {
-  FILE* fp = openForRead(filepath);
-  if (!fp) return false;
-  In in;
-  in.f = fp;
-  const bool ok = AppStoreCodec::readMessages(*this, in);
-  fclose(fp);
-  return ok;
+  return loadValidated(filepath, [this](In& in, bool commit) { return AppStoreCodec::readMessages(*this, in, commit); });
 }
 
 void AppStore::clearMessages() {
@@ -1584,14 +1704,10 @@ bool AppStore::saveToFile(const char* filepath) const {
 }
 
 bool AppStore::loadFromFile(const char* filepath) {
-  FILE* fp = openForRead(filepath);
-  if (!fp) return false;
-  In in;
-  in.f = fp;
-  bool ok = in.u32() == kComboMagic && AppStoreCodec::readUi(*this, in);
-  if (ok) ok = AppStoreCodec::readMessages(*this, in);
-  fclose(fp);
-  return ok;
+  return loadValidated(filepath, [this](In& in, bool commit) {
+    return in.u32() == kComboMagic && AppStoreCodec::readUi(*this, in, commit) &&
+           AppStoreCodec::readMessages(*this, in, commit);
+  });
 }
 
 }  // namespace faro::core

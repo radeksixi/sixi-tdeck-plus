@@ -1,13 +1,13 @@
 {
-  "name": "Faro 0.11.5 — LilyGo T-Deck / T-Deck Plus",
-  "version": "0.11.5",
-  "new_install_prompt_erase": false,
+  "name": "Faro 0.12.1 — LilyGo T-Deck / T-Deck Plus",
+  "version": "0.12.1",
+  "new_install_prompt_erase": true,
   "builds": [
     {
       "chipFamily": "ESP32-S3",
       "parts": [
         {
-          "path": "https://github.com/radeksixi/sixi-tdeck-plus/releases/download/v0.11.5/faro-tdeck-0.11.5-merged.bin",
+          "path": "./firmware/v0.12.1/faro-tdeck-0.12.1-merged.bin",
           "offset": 0
         }
       ]

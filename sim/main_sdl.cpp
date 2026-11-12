@@ -105,6 +105,7 @@ int main(int argc, char** argv) {
       if (strcmp(l, "IT") == 0 || strcmp(l, "it") == 0) lang = faro::core::Language::IT;
       else if (strcmp(l, "DE") == 0 || strcmp(l, "de") == 0) lang = faro::core::Language::DE;
       else if (strcmp(l, "FR") == 0 || strcmp(l, "fr") == 0) lang = faro::core::Language::FR;
+      else if (strcmp(l, "PL") == 0 || strcmp(l, "pl") == 0) lang = faro::core::Language::PL;
       else lang = faro::core::Language::EN;
     } else if (strcmp(argv[i], "--outdoor") == 0) {
       outdoor = true;
@@ -244,8 +245,10 @@ int main(int argc, char** argv) {
   }
   SDL_Window* win = SDL_CreateWindow("Faro — LilyGO T-Deck Plus Simulator (320x240)",
                                      SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-                                     kWidth * 2, kHeight * 2, SDL_WINDOW_SHOWN);
+                                     kWidth * 2, kHeight * 2,
+                                     SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
   SDL_Renderer* ren = SDL_CreateRenderer(win, -1, SDL_RENDERER_SOFTWARE);
+  SDL_RenderSetLogicalSize(ren, kWidth, kHeight);
   SDL_Texture* tex = SDL_CreateTexture(ren, SDL_PIXELFORMAT_RGB565,
                                        SDL_TEXTUREACCESS_STREAMING, kWidth, kHeight);
 
@@ -261,29 +264,56 @@ int main(int argc, char** argv) {
   });
 
   bool running = true;
+  bool fullscreen = false;
   uint32_t last_tick = SDL_GetTicks();
+  SDL_StartTextInput();
   while (running) {
     SDL_Event e;
     while (SDL_PollEvent(&e)) {
       if (e.type == SDL_QUIT) running = false;
       else if (e.type == SDL_MOUSEBUTTONDOWN) {
-        mouse_x = int16_t(e.button.x / 2);
-        mouse_y = int16_t(e.button.y / 2);
+        mouse_x = int16_t(e.button.x);
+        mouse_y = int16_t(e.button.y);
         mouse_down = true;
       } else if (e.type == SDL_MOUSEBUTTONUP) {
-        mouse_x = int16_t(e.button.x / 2);
-        mouse_y = int16_t(e.button.y / 2);
+        mouse_x = int16_t(e.button.x);
+        mouse_y = int16_t(e.button.y);
         mouse_down = false;
       } else if (e.type == SDL_MOUSEMOTION) {
-        mouse_x = int16_t(e.motion.x / 2);
-        mouse_y = int16_t(e.motion.y / 2);
+        mouse_x = int16_t(e.motion.x);
+        mouse_y = int16_t(e.motion.y);
+      } else if (e.type == SDL_TEXTINPUT) {
+        app.onTextInput(e.text.text);
       } else if (e.type == SDL_KEYDOWN) {
         SDL_Keycode sym = e.key.keysym.sym;
-        if (sym == SDLK_ESCAPE) app.onKeyPress(27);
+        uint16_t mod = e.key.keysym.mod;
+        if (sym == SDLK_F11) {
+          fullscreen = !fullscreen;
+          SDL_SetWindowFullscreen(win, fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
+        } else if ((mod & KMOD_CTRL) && sym == SDLK_v) {
+          if (SDL_HasClipboardText()) {
+            char* cb = SDL_GetClipboardText();
+            if (cb) {
+              strncpy(store.uiPrefs().clipboard, cb, sizeof(store.uiPrefs().clipboard) - 1);
+              store.uiPrefs().clipboard[sizeof(store.uiPrefs().clipboard) - 1] = '\0';
+              app.onTextInput(cb);
+              SDL_free(cb);
+            }
+          }
+        } else if ((mod & KMOD_CTRL) && sym == SDLK_c) {
+          if (store.uiPrefs().clipboard[0]) {
+            SDL_SetClipboardText(store.uiPrefs().clipboard);
+          }
+        } else if (sym == SDLK_ESCAPE) app.onKeyPress(27);
         else if (sym == SDLK_BACKSPACE) app.onKeyPress('\b');
         else if (sym == SDLK_RETURN || sym == SDLK_KP_ENTER) app.onKeyPress('\r');
         else if (sym == SDLK_TAB) app.onKeyPress('\t');
-        else if (sym >= 32 && sym < 127) app.onKeyPress(uint8_t(sym));
+        else if (!app.isTyping()) {
+          if (sym == SDLK_UP) app.onKeyPress('w');
+          else if (sym == SDLK_DOWN) app.onKeyPress('s');
+          else if (sym == SDLK_LEFT) app.onKeyPress('a');
+          else if (sym == SDLK_RIGHT) app.onKeyPress('d');
+        }
       }
     }
 

@@ -155,17 +155,32 @@ void App::buildMapView(lv_obj_t* parent) {
   }
   // GPS/SD state lives on the bottom HUD bar now — the map itself stays clean.
 
-  // Overlay self crosshair & contact pins on canvas
-  lv_obj_t* self_pin = lv_label_create(canvas);
-  lv_obj_set_style_text_font(self_pin, &faro_font_12, 0);
-  lv_obj_set_style_text_color(self_pin, p.accent, 0);
-  lv_label_set_text(self_pin, g.valid ? "[+] Me" : "[+]");
-  lv_obj_set_pos(self_pin, 134, 64);
-
   int cx_t = 0, cy_t = 0, cx_px = 0, cy_px = 0;
   geomath::latLonToTilePixel(clat, clon, _map_zoom, cx_t, cy_t, cx_px, cy_px);
   int32_t world_cx = cx_t * 256 + cx_px;
   int32_t world_cy = cy_t * 256 + cy_px;
+
+  // Overlay self crosshair & contact pins on canvas (projected so panning moves "[+] Me" accurately)
+  {
+    const bool has_own_pos = g.valid || st.manual_lat_deg != 0.0 || st.manual_lon_deg != 0.0;
+    int32_t self_sx = 134;
+    int32_t self_sy = 64;
+    bool show_self = true;
+    if (has_own_pos) {
+      int stx = 0, sty = 0, spx = 0, spy = 0;
+      geomath::latLonToTilePixel(base_lat, base_lon, _map_zoom, stx, sty, spx, spy);
+      self_sx = 154 + ((stx * 256 + spx) - world_cx) - 20;
+      self_sy = 72 + ((sty * 256 + spy) - world_cy) - 8;
+      show_self = (self_sx >= -16 && self_sx <= 296 && self_sy >= 0 && self_sy <= 130);
+    }
+    if (show_self) {
+      lv_obj_t* self_pin = lv_label_create(canvas);
+      lv_obj_set_style_text_font(self_pin, &faro_font_12, 0);
+      lv_obj_set_style_text_color(self_pin, p.accent, 0);
+      lv_label_set_text(self_pin, g.valid ? "[+] Me" : "[+]");
+      lv_obj_set_pos(self_pin, self_sx, self_sy);
+    }
+  }
 
   int32_t used_sy[16] = {0};
   size_t used_count = 0;
@@ -294,31 +309,21 @@ void App::buildMapView(lv_obj_t* parent) {
     } else {
       snprintf(scale_txt, sizeof(scale_txt), "~%dkm", int(dist_m / 1000.0 + 0.5));
     }
-    auto make_bar = [&](int x, int y, lv_coord_t width, lv_color_t color) {
-      static lv_point_precise_t pts[4] = {{0, 0}, {40, 0}, {0, 0}, {0, 0}};
-      pts[0].x = x; pts[0].y = y;
-      pts[1].x = x + 40; pts[1].y = y;
-      pts[2].x = x; pts[2].y = y - 4;
-      pts[3].x = x; pts[3].y = y + 4;
+    static const lv_point_precise_t kScaleBar[2]  = {{6, 127}, {46, 127}};
+    static const lv_point_precise_t kLeftTick[2]  = {{6, 123}, {6, 131}};
+    static const lv_point_precise_t kRightTick[2] = {{46, 123}, {46, 131}};
+    auto add_seg = [&](const lv_point_precise_t* seg, lv_coord_t width, lv_color_t color) {
       lv_obj_t* line = lv_line_create(canvas);
-      lv_line_set_points(line, pts, 4);
+      lv_line_set_points(line, seg, 2);
       lv_obj_set_style_line_width(line, width, 0);
       lv_obj_set_style_line_color(line, color, 0);
-      return line;
     };
-    make_bar(6, 127, 4, lv_color_hex(0x000000));
-    make_bar(6, 127, 2, lv_color_hex(0xFFFFFF));
-    static lv_point_precise_t r_tick[2] = {{0, 0}, {0, 0}};
-    r_tick[0].x = 46; r_tick[0].y = 123;
-    r_tick[1].x = 46; r_tick[1].y = 131;
-    lv_obj_t* rt_bg = lv_line_create(canvas);
-    lv_line_set_points(rt_bg, r_tick, 2);
-    lv_obj_set_style_line_width(rt_bg, 4, 0);
-    lv_obj_set_style_line_color(rt_bg, lv_color_hex(0x000000), 0);
-    lv_obj_t* rt_fg = lv_line_create(canvas);
-    lv_line_set_points(rt_fg, r_tick, 2);
-    lv_obj_set_style_line_width(rt_fg, 2, 0);
-    lv_obj_set_style_line_color(rt_fg, lv_color_hex(0xFFFFFF), 0);
+    add_seg(kScaleBar, 4, lv_color_hex(0x000000));
+    add_seg(kLeftTick, 4, lv_color_hex(0x000000));
+    add_seg(kRightTick, 4, lv_color_hex(0x000000));
+    add_seg(kScaleBar, 2, lv_color_hex(0xFFFFFF));
+    add_seg(kLeftTick, 2, lv_color_hex(0xFFFFFF));
+    add_seg(kRightTick, 2, lv_color_hex(0xFFFFFF));
     lv_obj_t* s_lbl = lv_label_create(canvas);
     lv_obj_set_style_text_font(s_lbl, &faro_font_12, 0);
     lv_obj_set_style_text_color(s_lbl, lv_color_hex(0x000000), 0);

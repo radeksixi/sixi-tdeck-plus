@@ -47,8 +47,6 @@ public:
     (void)ssids; (void)rssis; (void)max_networks;
     return 0;
   }
-  // Sixi: write a fresh 16-byte PSK to /faro/wifi_psk.bin and enable the guarded TCP transport.
-  virtual bool generateWifiPsk() { return false; }
 
   // Phone WiFi setup: a temporary WPA2 SoftAP + tiny HTTP form on port 80. Station WiFi stays up.
   virtual bool startWifiSetupAp(char* out_ssid, size_t ssid_len, char* out_pwd, size_t pwd_len,
@@ -153,7 +151,7 @@ public:
     return false;
   }
 
-  // Radio region: applies the region's first preset, power ceiling and duty cycle (Sixi: EU 868 only)
+  // Radio region: applies the region's first preset, power ceiling and duty cycle.
   virtual bool setRegion(RadioRegionId id) { (void)id; return false; }
 
   // Exports (device: SD card /faro/, desktop: /tmp); out_path gets the written file or the error

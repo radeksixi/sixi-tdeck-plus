@@ -11,6 +11,7 @@
 #include <fcntl.h>
 #include <netdb.h>
 #include <poll.h>
+#include <signal.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -23,6 +24,17 @@ namespace faro::platform::remote {
 using namespace faro::core;
 
 namespace {
+
+uint64_t nowMonoMs() {
+  struct timespec ts{};
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return uint64_t(ts.tv_sec) * 1000ULL + uint64_t(ts.tv_nsec / 1000000L);
+}
+
+void wipeBytes(void* buf, size_t n) {
+  volatile uint8_t* p = static_cast<volatile uint8_t*>(buf);
+  for (size_t i = 0; i < n; ++i) p[i] = 0;
+}
 
 uint16_t readU16LE(const uint8_t* p) {
   return uint16_t(p[0]) | (uint16_t(p[1]) << 8);
@@ -50,6 +62,8 @@ CompanionClientMeshActions::CompanionClientMeshActions(AppStore& store, MeshEven
 
 CompanionClientMeshActions::~CompanionClientMeshActions() {
   disconnect();
+  wipeBytes(_last_psk, sizeof(_last_psk));
+  _has_last_psk = false;
 }
 
 void CompanionClientMeshActions::disconnect() {
@@ -57,15 +71,16 @@ void CompanionClientMeshActions::disconnect() {
     ::close(_fd);
     _fd = -1;
   }
+  _is_socket = false;
   _rx_buf.clear();
 }
 
 bool CompanionClientMeshActions::connectTcp(const char* host, uint16_t port, const uint8_t* token16) {
   disconnect();
-  if (!host) return false;
+  if (!host || !host[0]) return false;
 
   struct addrinfo hints{};
-  hints.ai_family = AF_INET;
+  hints.ai_family = AF_UNSPEC;
   hints.ai_socktype = SOCK_STREAM;
   char port_str[16];
   snprintf(port_str, sizeof(port_str), "%u", unsigned(port));
@@ -75,26 +90,75 @@ bool CompanionClientMeshActions::connectTcp(const char* host, uint16_t port, con
     return false;
   }
 
-  int fd = ::socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-  if (fd < 0) {
-    freeaddrinfo(res);
-    return false;
-  }
+  int fd = -1;
+  for (struct addrinfo* ai = res; ai != nullptr; ai = ai->ai_next) {
+    int cand = ::socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+    if (cand < 0) continue;
 
-  if (::connect(fd, res->ai_addr, res->ai_addrlen) != 0) {
-    ::close(fd);
-    freeaddrinfo(res);
-    return false;
+    int flags = ::fcntl(cand, F_GETFL, 0);
+    if (flags >= 0) (void)::fcntl(cand, F_SETFL, flags | O_NONBLOCK);
+#ifdef SO_NOSIGPIPE
+    int one = 1;
+    (void)setsockopt(cand, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof(one));
+#endif
+
+    int rc = ::connect(cand, ai->ai_addr, ai->ai_addrlen);
+    if (rc != 0) {
+      if (errno != EINPROGRESS && errno != EALREADY && errno != EINTR) {
+        ::close(cand);
+        continue;
+      }
+      struct pollfd pfd{cand, POLLOUT, 0};
+      int prc = 0;
+      const uint64_t deadline = nowMonoMs() + 3000ULL;
+      while (true) {
+        const uint64_t now = nowMonoMs();
+        if (now >= deadline) {
+          prc = 0;
+          break;
+        }
+        prc = ::poll(&pfd, 1, int(deadline - now));
+        if (prc < 0 && errno == EINTR) continue;
+        break;
+      }
+      if (prc <= 0 || !(pfd.revents & POLLOUT)) {
+        ::close(cand);
+        continue;
+      }
+      int so_err = 0;
+      socklen_t slen = sizeof(so_err);
+      if (getsockopt(cand, SOL_SOCKET, SO_ERROR, &so_err, &slen) != 0 || so_err != 0) {
+        ::close(cand);
+        continue;
+      }
+    }
+    fd = cand;
+    break;
   }
   freeaddrinfo(res);
-  _fd = fd;
+  if (fd < 0) return false;
 
-  (void)token16;
+  _fd = fd;
+  _is_socket = true;
+
+  if (token16) {
+    if (token16 != _last_psk) {
+      memcpy(_last_psk, token16, sizeof(_last_psk));
+    }
+    _has_last_psk = true;
+  } else {
+    wipeBytes(_last_psk, sizeof(_last_psk));
+    _has_last_psk = false;
+  }
   _store.status().wifi_connected = true;
   strncpy(_store.status().wifi_ip, host, sizeof(_store.status().wifi_ip) - 1);
-  strncpy(_last_host, host, sizeof(_last_host) - 1);
+  _store.status().wifi_ip[sizeof(_store.status().wifi_ip) - 1] = '\0';
+  if (_last_host != host) {
+    strncpy(_last_host, host, sizeof(_last_host) - 1);
+    _last_host[sizeof(_last_host) - 1] = '\0';
+  }
   _last_port = port;
-  snprintf(_store.status().conn_target, sizeof(_store.status().conn_target), "%s:%u", host, unsigned(port));
+  snprintf(_store.status().conn_target, sizeof(_store.status().conn_target), "%.56s:%u", host, unsigned(port));
   return true;
 }
 
@@ -116,7 +180,12 @@ bool CompanionClientMeshActions::connectSerial(const char* dev_path, int baud) {
     tcsetattr(fd, TCSANOW, &tty);
   }
   _fd = fd;
+  _is_socket = false;
+  _last_host[0] = '\0';
+  wipeBytes(_last_psk, sizeof(_last_psk));
+  _has_last_psk = false;
   strncpy(_store.status().conn_target, dev_path, sizeof(_store.status().conn_target) - 1);
+  _store.status().conn_target[sizeof(_store.status().conn_target) - 1] = '\0';
   return true;
 }
 
@@ -130,11 +199,28 @@ bool CompanionClientMeshActions::sendFrame(const uint8_t* payload, size_t len) {
 
   size_t total = 0;
   while (total < frame.size()) {
-    ssize_t n = ::write(_fd, frame.data() + total, frame.size() - total);
-    if (n <= 0) {
+    ssize_t n = -1;
+    if (_is_socket) {
+#ifdef MSG_NOSIGNAL
+      n = ::send(_fd, frame.data() + total, frame.size() - total, MSG_NOSIGNAL);
+#else
+      n = ::send(_fd, frame.data() + total, frame.size() - total, 0);
+#endif
+    } else {
+      n = ::write(_fd, frame.data() + total, frame.size() - total);
+    }
+    if (n < 0) {
       if (errno == EINTR) continue;
+      if (errno == EAGAIN || errno == EWOULDBLOCK) {
+        struct pollfd wpfd{_fd, POLLOUT, 0};
+        if (::poll(&wpfd, 1, 500) <= 0 || (wpfd.revents & (POLLERR | POLLHUP | POLLNVAL))) {
+          return false;
+        }
+        continue;
+      }
       return false;
     }
+    if (n == 0) return false;
     total += size_t(n);
   }
   _store.status().tx_packets++;
@@ -147,13 +233,22 @@ bool CompanionClientMeshActions::recvFrameBlocking(std::vector<uint8_t>& out, in
   pfd.fd = _fd;
   pfd.events = POLLIN;
 
-  int elapsed = 0;
-  while (elapsed < timeout_ms) {
-    while (_rx_buf.size() >= 3 && _rx_buf[0] != '>') {
-      _rx_buf.erase(_rx_buf.begin());
+  const uint64_t deadline = nowMonoMs() + uint64_t(timeout_ms > 0 ? timeout_ms : 0);
+  while (true) {
+    while (_rx_buf.size() >= 3) {
+      if (_rx_buf[0] != '>') {
+        _rx_buf.erase(_rx_buf.begin());
+        continue;
+      }
+      const uint16_t flen = readU16LE(&_rx_buf[1]);
+      if (flen == 0 || flen > kMaxCompanionFrame) {
+        _rx_buf.erase(_rx_buf.begin());
+        continue;
+      }
+      break;
     }
-    if (_rx_buf.size() >= 3) {
-      uint16_t flen = readU16LE(&_rx_buf[1]);
+    if (_rx_buf.size() >= 3 && _rx_buf[0] == '>') {
+      const uint16_t flen = readU16LE(&_rx_buf[1]);
       if (_rx_buf.size() >= size_t(3 + flen)) {
         out.assign(_rx_buf.begin() + 3, _rx_buf.begin() + 3 + flen);
         _rx_buf.erase(_rx_buf.begin(), _rx_buf.begin() + 3 + flen);
@@ -162,14 +257,22 @@ bool CompanionClientMeshActions::recvFrameBlocking(std::vector<uint8_t>& out, in
       }
     }
 
-    int rc = ::poll(&pfd, 1, 50);
-    elapsed += 50;
-    if (rc > 0 && (pfd.revents & POLLIN)) {
+    const uint64_t now = nowMonoMs();
+    if (now >= deadline) break;
+    const int wait_ms = int((deadline - now) > 50ULL ? 50ULL : (deadline - now));
+    int rc = ::poll(&pfd, 1, wait_ms);
+    if (rc < 0) {
+      if (errno == EINTR) continue;
+      return false;
+    }
+    if (rc > 0 && (pfd.revents & (POLLIN | POLLHUP | POLLERR))) {
       uint8_t tmp[256];
       ssize_t n = ::read(_fd, tmp, sizeof(tmp));
       if (n > 0) {
         _rx_buf.insert(_rx_buf.end(), tmp, tmp + n);
       } else if (n == 0) {
+        return false;
+      } else if (errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK) {
         return false;
       }
     }
@@ -177,15 +280,33 @@ bool CompanionClientMeshActions::recvFrameBlocking(std::vector<uint8_t>& out, in
   return false;
 }
 
+bool CompanionClientMeshActions::waitForResponse(std::vector<uint8_t>& out, uint8_t expected_code,
+                                                 int timeout_ms) {
+  const uint64_t deadline = nowMonoMs() + uint64_t(timeout_ms > 0 ? timeout_ms : 0);
+  while (true) {
+    const uint64_t now = nowMonoMs();
+    if (now >= deadline) return false;
+    if (!recvFrameBlocking(out, int(deadline - now)) || out.empty()) return false;
+    const uint8_t code = out[0];
+    handleIncomingFrame(out.data(), out.size());
+    if (code >= 0x80) {
+      continue;  // Asynchronous PUSH_* processed; keep waiting for command reply
+    }
+    if (code == expected_code || code == RESP_CODE_ERR) {
+      return true;
+    }
+  }
+}
+
 void CompanionClientMeshActions::syncStore() {
   if (_fd < 0) return;
 
+  std::vector<uint8_t> resp;
+
   // 1. CMD_DEVICE_QUERY (22)
   uint8_t dq[2] = {CMD_DEVICE_QUERY, 3};
-  sendFrame(dq, sizeof(dq));
-  std::vector<uint8_t> resp;
-  if (recvFrameBlocking(resp, 800) && !resp.empty()) {
-    handleIncomingFrame(resp.data(), resp.size());
+  if (sendFrame(dq, sizeof(dq))) {
+    (void)waitForResponse(resp, RESP_CODE_DEVICE_INFO, 800);
   }
 
   // 2. CMD_APP_START (1): [1, app_ver(1), reserved(6), app_name...]
@@ -193,43 +314,54 @@ void CompanionClientMeshActions::syncStore() {
   app_start[0] = CMD_APP_START;
   app_start[1] = 3;
   memcpy(&app_start[8], "faro-cli", 8);
-  sendFrame(app_start, sizeof(app_start));
-  if (recvFrameBlocking(resp, 800) && !resp.empty()) {
-    handleIncomingFrame(resp.data(), resp.size());
+  if (sendFrame(app_start, sizeof(app_start))) {
+    (void)waitForResponse(resp, RESP_CODE_SELF_INFO, 800);
   }
 
   // 3. CMD_GET_CONTACTS (4)
   uint8_t gc[1] = {CMD_GET_CONTACTS};
-  sendFrame(gc, sizeof(gc));
-  for (int i = 0; i < 64; ++i) {
-    if (!recvFrameBlocking(resp, 600) || resp.empty()) break;
-    handleIncomingFrame(resp.data(), resp.size());
-    if (resp[0] == RESP_CODE_END_OF_CONTACTS) break;
+  if (sendFrame(gc, sizeof(gc))) {
+    for (size_t i = 0; i < AppStore::kMaxContacts + 16; ++i) {
+      if (!recvFrameBlocking(resp, 600) || resp.empty()) break;
+      handleIncomingFrame(resp.data(), resp.size());
+      if (resp[0] == RESP_CODE_END_OF_CONTACTS || resp[0] == RESP_CODE_ERR) break;
+    }
   }
 
-  // 4. CMD_GET_CHANNEL (31) for slots 0..3
-  for (uint8_t ch = 0; ch < 4; ++ch) {
+  // 4. CMD_GET_CHANNEL (31) across all store slots (radio returns RESP_CODE_ERR past last slot)
+  for (uint8_t ch = 0; ch < AppStore::kMaxChannels; ++ch) {
     uint8_t gch[2] = {CMD_GET_CHANNEL, ch};
-    sendFrame(gch, sizeof(gch));
-    if (recvFrameBlocking(resp, 500) && !resp.empty()) {
-      handleIncomingFrame(resp.data(), resp.size());
+    if (!sendFrame(gch, sizeof(gch))) break;
+    if (!waitForResponse(resp, RESP_CODE_CHANNEL_INFO, 400) || resp.empty() ||
+        resp[0] == RESP_CODE_ERR) {
+      break;
     }
   }
 
   // 5. CMD_SYNC_NEXT_MESSAGE (10)
-  for (int i = 0; i < 16; ++i) {
+  for (int i = 0; i < 64; ++i) {
     uint8_t sm[1] = {CMD_SYNC_NEXT_MESSAGE};
-    sendFrame(sm, sizeof(sm));
-    if (!recvFrameBlocking(resp, 500) || resp.empty()) break;
-    handleIncomingFrame(resp.data(), resp.size());
-    if (resp[0] == RESP_CODE_NO_MORE_MESSAGES) break;
+    if (!sendFrame(sm, sizeof(sm))) break;
+    bool done_msgs = false;
+    while (true) {
+      if (!recvFrameBlocking(resp, 500) || resp.empty()) {
+        done_msgs = true;
+        break;
+      }
+      handleIncomingFrame(resp.data(), resp.size());
+      if (resp[0] >= 0x80) continue;
+      if (resp[0] == RESP_CODE_NO_MORE_MESSAGES || resp[0] == RESP_CODE_ERR) {
+        done_msgs = true;
+      }
+      break;
+    }
+    if (done_msgs) break;
   }
 
   // 6. CMD_GET_BATT_AND_STORAGE (20)
   uint8_t bs[1] = {CMD_GET_BATT_AND_STORAGE};
-  sendFrame(bs, sizeof(bs));
-  if (recvFrameBlocking(resp, 400) && !resp.empty()) {
-    handleIncomingFrame(resp.data(), resp.size());
+  if (sendFrame(bs, sizeof(bs))) {
+    (void)waitForResponse(resp, RESP_CODE_BATT_AND_STORAGE, 400);
   }
 }
 
@@ -239,7 +371,7 @@ void CompanionClientMeshActions::poll() {
       uint32_t now_s = uint32_t(time(nullptr));
       if (now_s - _last_reconnect_ms >= 5) {
         _last_reconnect_ms = now_s;
-        if (connectTcp(_last_host, _last_port, nullptr)) {
+        if (connectTcp(_last_host, _last_port, _has_last_psk ? _last_psk : nullptr)) {
           syncStore();
         }
       }
@@ -255,13 +387,27 @@ void CompanionClientMeshActions::poll() {
       peer_closed = true;
       break;
     }
-    if (n < 0) break;
+    if (n < 0) {
+      if (errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK) {
+        peer_closed = true;
+      }
+      break;
+    }
     _rx_buf.insert(_rx_buf.end(), tmp, tmp + n);
   }
 
   while (true) {
-    while (_rx_buf.size() >= 3 && _rx_buf[0] != '>') {
-      _rx_buf.erase(_rx_buf.begin());
+    while (_rx_buf.size() >= 3) {
+      if (_rx_buf[0] != '>') {
+        _rx_buf.erase(_rx_buf.begin());
+        continue;
+      }
+      const uint16_t flen = readU16LE(&_rx_buf[1]);
+      if (flen == 0 || flen > kMaxCompanionFrame) {
+        _rx_buf.erase(_rx_buf.begin());
+        continue;
+      }
+      break;
     }
     if (_rx_buf.size() < 3) break;
     uint16_t flen = readU16LE(&_rx_buf[1]);
@@ -424,7 +570,9 @@ void CompanionClientMeshActions::handleIncomingFrame(const uint8_t* data, size_t
 
     case RESP_CODE_SENT: {
       if (len >= 10) {
+        _last_sent_flood = (data[1] != 0);
         _last_sent_crc = readU32LE(&data[2]);
+        _got_sent_resp = true;
       }
       break;
     }
@@ -582,19 +730,24 @@ bool CompanionClientMeshActions::resendDirectMessage(uint32_t msg_id) {
   writeU32LE(&pkt[3], uint32_t(time(nullptr)));
   memcpy(&pkt[7], m->peer_prefix, 6);
   memcpy(&pkt[13], m->text, tlen);
+  _got_sent_resp = false;
+  _last_sent_flood = false;
   if (!sendFrame(pkt.data(), pkt.size())) {
     m->delivery_state = DeliveryState::Failed;
     _store.bumpVersion();
     return false;
   }
   std::vector<uint8_t> resp;
-  if (recvFrameBlocking(resp, 300) && !resp.empty()) {
-    handleIncomingFrame(resp.data(), resp.size());
-  }
+  const bool got = waitForResponse(resp, RESP_CODE_SENT, 400);
   m = _store.findMessageByIdMutable(msg_id);  // handleIncomingFrame may have appended messages
+  if (got && !resp.empty() && resp[0] == RESP_CODE_ERR) {
+    if (m) m->delivery_state = DeliveryState::Failed;
+    _store.bumpVersion();
+    return false;
+  }
   if (m) {
-    m->ack_crc = _last_sent_crc;
-    m->delivery_state = DeliveryState::SentDirect;
+    if (_got_sent_resp) m->ack_crc = _last_sent_crc;
+    m->delivery_state = _last_sent_flood ? DeliveryState::SentFlood : DeliveryState::SentDirect;
   }
   _store.bumpVersion();
   return true;
@@ -602,36 +755,83 @@ bool CompanionClientMeshActions::resendDirectMessage(uint32_t msg_id) {
 
 bool CompanionClientMeshActions::sendDirectMessage(const uint8_t peer_pubkey[32], const char* text,
                                                    uint32_t& out_ack_crc, DeliveryState& out_state) {
-  if (!peer_pubkey || !text) return false;
-  size_t tlen = strlen(text);
+  if (!peer_pubkey || !text || !text[0]) return false;
+  const size_t tlen = strlen(text);
+  const uint32_t ts = uint32_t(time(nullptr));
   std::vector<uint8_t> pkt(13 + tlen);
   pkt[0] = CMD_SEND_TXT_MSG;
   pkt[1] = 0;  // TXT_TYPE_PLAIN
   pkt[2] = 0;  // attempt 0
-  writeU32LE(&pkt[3], uint32_t(time(nullptr)));
+  writeU32LE(&pkt[3], ts);
   memcpy(&pkt[7], peer_pubkey, 6);
   memcpy(&pkt[13], text, tlen);
+  _got_sent_resp = false;
+  _last_sent_flood = false;
   if (!sendFrame(pkt.data(), pkt.size())) return false;
 
   std::vector<uint8_t> resp;
-  if (recvFrameBlocking(resp, 300) && !resp.empty()) {
-    handleIncomingFrame(resp.data(), resp.size());
+  if (waitForResponse(resp, RESP_CODE_SENT, 400) && !resp.empty() && resp[0] == RESP_CODE_ERR) {
+    return false;
   }
-  out_ack_crc = _last_sent_crc;
-  out_state = DeliveryState::SentDirect;
+  const ContactRecord* c = _store.findContactByPubKey(peer_pubkey);
+  out_ack_crc = _got_sent_resp ? _last_sent_crc : ++_last_sent_crc;
+  if (_got_sent_resp) {
+    out_state = _last_sent_flood ? DeliveryState::SentFlood : DeliveryState::SentDirect;
+  } else {
+    out_state = (c && c->hasPath()) ? DeliveryState::SentDirect : DeliveryState::SentFlood;
+  }
+
+  MessageRecord m{};
+  m.is_channel = false;
+  memcpy(m.peer_prefix, peer_pubkey, 6);
+  strncpy(m.sender_name, _store.status().node_name[0] ? _store.status().node_name : "Me",
+          sizeof(m.sender_name) - 1);
+  strncpy(m.text, text, sizeof(m.text) - 1);
+  m.timestamp = ts;
+  m.ack_crc = out_ack_crc;
+  m.delivery_state = out_state;
+  m.hops = c ? c->pathHops() : 0;
+  m.outgoing = true;
+  m.valid = true;
+  _store.appendMessage(m);
+  if (out_state == DeliveryState::SentDirect) {
+    _store.status().direct_tx++;
+  } else {
+    _store.status().flood_tx++;
+  }
   return true;
 }
 
 bool CompanionClientMeshActions::sendChannelMessage(uint8_t channel_index, const char* text) {
-  if (!text) return false;
-  size_t tlen = strlen(text);
+  if (!text || !text[0]) return false;
+  const size_t tlen = strlen(text);
+  const uint32_t ts = uint32_t(time(nullptr));
   std::vector<uint8_t> pkt(7 + tlen);
   pkt[0] = CMD_SEND_CHANNEL_TXT_MSG;
   pkt[1] = 0;  // TXT_TYPE_PLAIN
   pkt[2] = channel_index;
-  writeU32LE(&pkt[3], uint32_t(time(nullptr)));
+  writeU32LE(&pkt[3], ts);
   memcpy(&pkt[7], text, tlen);
-  return sendFrame(pkt.data(), pkt.size());
+  if (!sendFrame(pkt.data(), pkt.size())) return false;
+
+  std::vector<uint8_t> resp;
+  if (waitForResponse(resp, RESP_CODE_OK, 300) && !resp.empty() && resp[0] == RESP_CODE_ERR) {
+    return false;
+  }
+
+  MessageRecord m{};
+  m.is_channel = true;
+  m.channel_index = channel_index;
+  strncpy(m.sender_name, _store.status().node_name[0] ? _store.status().node_name : "Me",
+          sizeof(m.sender_name) - 1);
+  strncpy(m.text, text, sizeof(m.text) - 1);
+  m.timestamp = ts;
+  m.delivery_state = DeliveryState::SentFlood;
+  m.outgoing = true;
+  m.valid = true;
+  _store.appendMessage(m);
+  _store.status().flood_tx++;
+  return true;
 }
 
 bool CompanionClientMeshActions::sendZeroHopAdvert() {
@@ -673,14 +873,28 @@ bool CompanionClientMeshActions::setPreferredRepeater(const uint8_t repeater_pub
 }
 
 bool CompanionClientMeshActions::addChannel(const char* name, const uint8_t* secret, uint8_t secret_len) {
-  if (!name || !secret) return false;
+  if (!name || !name[0] || !secret) return false;
   uint8_t idx = uint8_t(_store.channelCount());
+  if (idx >= AppStore::kMaxChannels) return false;
   uint8_t pkt[50] = {0};
   pkt[0] = CMD_SET_CHANNEL;
   pkt[1] = idx;
   strncpy(reinterpret_cast<char*>(&pkt[2]), name, 31);
   memcpy(&pkt[34], secret, secret_len <= 16 ? secret_len : 16);
-  return sendFrame(pkt, sizeof(pkt));
+  if (!sendFrame(pkt, sizeof(pkt))) return false;
+  std::vector<uint8_t> resp;
+  if (waitForResponse(resp, RESP_CODE_OK, 300) && !resp.empty() && resp[0] == RESP_CODE_ERR) {
+    return false;
+  }
+  ChannelRecord ch{};
+  ch.index = idx;
+  strncpy(ch.name, name, sizeof(ch.name) - 1);
+  ch.secret_len = 16;
+  memcpy(ch.secret, &pkt[34], 16);
+  ch.is_hashtag = (name[0] == '#');
+  ch.valid = true;
+  _store.upsertChannel(ch);
+  return true;
 }
 
 bool CompanionClientMeshActions::addHashtagChannel(const char* hashtag_name) {
@@ -869,9 +1083,7 @@ bool CompanionClientMeshActions::runCliCommand(const char* cmd, char* out_reply,
   if (!sendFrame(pkt.data(), pkt.size())) return false;
 
   std::vector<uint8_t> resp;
-  if (recvFrameBlocking(resp, 600) && !resp.empty()) {
-    handleIncomingFrame(resp.data(), resp.size());
-  }
+  (void)waitForResponse(resp, RESP_CODE_CLI_REPLY, 600);
   if (out_reply && max_len > 0) {
     strncpy(out_reply, _store.status().last_cli_reply, max_len - 1);
     out_reply[max_len - 1] = '\0';
@@ -1038,7 +1250,7 @@ bool CompanionClientMeshActions::setPathHashMode(uint8_t hash_bytes) {
 }
 
 bool CompanionClientMeshActions::rebootRadio() {
-  uint8_t pkt[1] = {CMD_REBOOT};
+  uint8_t pkt[7] = {CMD_REBOOT, 'r', 'e', 'b', 'o', 'o', 't'};
   return sendFrame(pkt, sizeof(pkt));
 }
 
@@ -1051,7 +1263,8 @@ bool CompanionClientMeshActions::useLastAdvertPath(const uint8_t target_pubkey[3
   if (!sendFrame(pkt, sizeof(pkt))) return false;
 
   std::vector<uint8_t> resp;
-  if (recvFrameBlocking(resp, 400) && resp.size() >= 6 && resp[0] == RESP_CODE_ADVERT_PATH) {
+  if (waitForResponse(resp, RESP_CODE_ADVERT_PATH, 400) && resp.size() >= 6 &&
+      resp[0] == RESP_CODE_ADVERT_PATH) {
     uint8_t plen = resp[5];
     size_t path_bytes = resp.size() - 6;
     if (path_bytes > 64) path_bytes = 64;
@@ -1090,9 +1303,7 @@ bool CompanionClientMeshActions::getCustomVars(char* out_vars, size_t max_len) {
   uint8_t pkt[1] = {CMD_GET_CUSTOM_VARS};
   if (!sendFrame(pkt, sizeof(pkt))) return false;
   std::vector<uint8_t> resp;
-  if (recvFrameBlocking(resp, 400) && !resp.empty()) {
-    handleIncomingFrame(resp.data(), resp.size());
-  }
+  (void)waitForResponse(resp, RESP_CODE_CUSTOM_VARS, 400);
   if (out_vars && max_len > 0) {
     strncpy(out_vars, _store.status().custom_vars_str, max_len - 1);
     out_vars[max_len - 1] = '\0';
@@ -1108,7 +1319,7 @@ bool CompanionClientMeshActions::setCustomVar(const char* key_val) {
   memcpy(&pkt[1], key_val, kvlen);
   if (!sendFrame(pkt.data(), pkt.size())) return false;
   std::vector<uint8_t> resp;
-  (void)recvFrameBlocking(resp, 300);
+  (void)waitForResponse(resp, RESP_CODE_OK, 300);
   char dummy[128];
   getCustomVars(dummy, sizeof(dummy));
   return true;
@@ -1134,7 +1345,8 @@ bool CompanionClientMeshActions::reconnectTarget(const char* target_spec) {
   } else {
     strncpy(host, target_spec, sizeof(host) - 1);
   }
-  if (connectTcp(host, port, nullptr)) {
+  const uint8_t* psk = (_has_last_psk && strcmp(host, _last_host) == 0) ? _last_psk : nullptr;
+  if (connectTcp(host, port, psk)) {
     syncStore();
     return true;
   }
@@ -1166,9 +1378,9 @@ bool CompanionClientMeshActions::scanLanRadios(char* out_found, size_t max_len) 
           if (getsockopt(sock, SOL_SOCKET, SO_ERROR, &err, &elen) == 0 && err == 0) {
             ::close(sock);
             fclose(arp);
-            snprintf(_store.status().conn_target, sizeof(_store.status().conn_target), "%s:5000", ip);
+            snprintf(_store.status().conn_target, sizeof(_store.status().conn_target), "%.56s:5000", ip);
             if (out_found && max_len > 0) {
-              snprintf(out_found, max_len, "%s:5000", ip);
+              snprintf(out_found, max_len, "%.56s:5000", ip);
             }
             _store.bumpVersion();
             return true;

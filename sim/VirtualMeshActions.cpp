@@ -214,7 +214,7 @@ bool VirtualMeshActions::sendDirectMessage(const uint8_t peer_pubkey[32], const 
   if (!peer_pubkey || !text || !text[0]) return false;
   out_ack_crc = ++_next_crc;
   const ContactRecord* c = _store.findContactByPubKey(peer_pubkey);
-  out_state = (c && c->out_path_len < 64) ? DeliveryState::SentDirect : DeliveryState::SentFlood;
+  out_state = (c && c->hasPath()) ? DeliveryState::SentDirect : DeliveryState::SentFlood;
 
   MessageRecord m{};
   m.is_channel = false;
@@ -224,7 +224,7 @@ bool VirtualMeshActions::sendDirectMessage(const uint8_t peer_pubkey[32], const 
   m.timestamp = 1729416100;
   m.ack_crc = out_ack_crc;
   m.delivery_state = out_state;
-  m.hops = (c && c->out_path_len < 64) ? c->out_path_len : 0;
+  m.hops = c ? c->pathHops() : 0;
   m.outgoing = true;
   _store.appendMessage(m);
   _store.status().tx_packets++;
@@ -732,7 +732,9 @@ bool VirtualMeshActions::importSettingsFromSd() {
   setDefaultScope(snap.active_scope_name);
 
   auto& up = _store.uiPrefs();
-  up.language = static_cast<core::Language>(snap.language % 4);
+  up.language = (snap.language <= uint8_t(core::Language::PL))
+                    ? static_cast<core::Language>(snap.language)
+                    : core::Language::EN;
   up.outdoor_high_contrast = snap.outdoor_high_contrast;
   up.screen_timeout_secs = snap.screen_timeout_secs;
   up.quiet_mode = snap.quiet_mode;

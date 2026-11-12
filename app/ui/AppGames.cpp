@@ -571,7 +571,14 @@ void App::buildGame2048View(lv_obj_t* parent) {
   lv_obj_set_style_text_color(hint, p.text_secondary, 0);
   lv_label_set_text(hint, "Swipe or W/A/S/D | N new | Q exit");
 
-  if (_2048_grid[0] == 0 && _2048_grid[15] == 0) new2048();
+  bool empty_grid = true;
+  for (int i = 0; i < 16; ++i) {
+    if (_2048_grid[i] != 0) {
+      empty_grid = false;
+      break;
+    }
+  }
+  if (empty_grid) new2048();
   else update2048();
 }
 

@@ -8,25 +8,26 @@ companion firmware. It runs on the device next to the normal companion interface
   Faro attaches through upstream's `platformio.local.ini` hook and the `AbstractUITask` listener; it adds no
   companion opcodes.
 - **Licence:** Apache-2.0 (see `LICENSE`, `NOTICE`, `LICENSES/`, `docs/THIRD_PARTY.md`).
-- **Status:** 0.11.5, pre-1.0. Release binaries are 0.11.5 (see `docs/FLASHING.md`). Test it on your own
+- **Status:** 0.12.1, pre-1.0. Release binaries are 0.12.1 (see `docs/FLASHING.md`). Test it on your own
   hardware before relying on it.
 
 ## Download & install
 
-**Firmware:** the [`v0.11.5` release](https://github.com/radeksixi/sixi-tdeck-plus/releases/tag/v0.11.5)
+**Firmware:** the [`v0.12.1` release](https://github.com/radeksixi/sixi-tdeck-plus/releases/tag/v0.12.1)
 has one `.bin` per board, a desktop `.deb` and a firmware bundle. Verify with `sha256sum -c SHA256SUMS`.
 
 T-Deck / T-Deck Plus:
 
 | What | File | Flash at |
 |---|---|---|
-| Full image (first install / recovery) | [`faro-tdeck-0.11.5-merged.bin`](https://github.com/radeksixi/sixi-tdeck-plus/releases/download/v0.11.5/faro-tdeck-0.11.5-merged.bin) | `0x0` |
-| App only (update, keeps keys & contacts) | [`faro-tdeck-0.11.5-app.bin`](https://github.com/radeksixi/sixi-tdeck-plus/releases/download/v0.11.5/faro-tdeck-0.11.5-app.bin) | `0x10000` |
+| Full image (first install / recovery) | [`faro-tdeck-0.12.1-merged.bin`](https://github.com/radeksixi/sixi-tdeck-plus/releases/download/v0.12.1/faro-tdeck-0.12.1-merged.bin) | `0x0` |
+| App only (update, keeps keys & contacts) | [`faro-tdeck-0.12.1-app.bin`](https://github.com/radeksixi/sixi-tdeck-plus/releases/download/v0.12.1/faro-tdeck-0.12.1-app.bin) | `0x10000` |
 
 **Three ways to install:**
 
 1. **Browser, no install (easiest).** Put the T-Deck into download mode (off → hold the trackball → on →
-   release; the screen stays dark), connect USB-C, then flash from Chrome/Edge with any
+   release; the screen stays dark), connect USB-C, then flash directly from Chrome/Edge on the
+   [Faro Web Flasher](https://radeksixi.github.io/sixi-tdeck-plus/) or with any
    [ESP Web Tools](https://esphome.github.io/esp-web-tools/) flasher — for example
    [espflasher.app](https://espflasher.app/): choose ESP32-S3, load the `-merged.bin`, flash at `0x0`.
    (Or paste the CORS-enabled URL from `docs/FLASHING.md`.)
@@ -103,7 +104,7 @@ Chats and channels (including `#hashtag` channels), contact discovery (adverts a
 and import, path discovery and trace path (SNR per hop), remote administration of repeaters and room servers
 (login, status, telemetry, neighbours, ACL, CLI), offline map tiles from the SD card, radio regions, radio and node
 settings, diagnostics (RX log, link budget, mesh graph, strongest repeater), GPX tracks, SD backup of settings, and
-EN/IT/DE/FR text for the main screens.
+EN/IT/DE/FR/PL text for the main screens.
 
 What Faro keeps on the device's flash (next to MeshCore's own files): the radio region, UI settings, contact
 tags/notes/favourites and the chat history (`/faro_ui.bin`, `/faro_msgs.bin`; written at most once a minute).

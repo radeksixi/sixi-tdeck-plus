@@ -140,7 +140,8 @@ void App::tick(uint32_t now_ms) {
 
   if (_current_screen == ScreenId::Game) snakeTick(now_ms);
 
-  if (_store.version() != _last_rendered_version) {
+  if (_defer_render || _store.version() != _last_rendered_version) {
+    _defer_render = false;
     updateStatusBar();
     renderBody();
     _last_rendered_version = _store.version();
@@ -167,6 +168,8 @@ void App::showScreen(ScreenId id) {
   _draft_text[0] = '\0';
   _draft_key = 0xFFFFFFFFU;
   _compose_key = 0xFFFFFFFFU;
+  _view_key = 0xFFFFFFFFU;
+  _defer_render = false;
   if (_input_group) {
     lv_group_remove_all_objs(_input_group);
   }
@@ -230,6 +233,37 @@ void App::openContactDetail(size_t contact_idx) {
   showScreen(ScreenId::ContactDetail);
 }
 
+bool App::isTyping() const {
+  if (!_compose_ta) return false;
+  if (!_input_group) return true;
+  lv_obj_t* focused = lv_group_get_focused(_input_group);
+  return focused == nullptr || focused == _compose_ta;
+}
+
+void App::onTextInput(const char* utf8) {
+  if (!utf8 || !utf8[0]) return;
+  if (isTyping()) {
+    char clean[sizeof(_draft_text)] = {0};
+    size_t j = 0;
+    for (const unsigned char* p = reinterpret_cast<const unsigned char*>(utf8);
+         *p && j + 1 < sizeof(clean); ++p) {
+      if (*p >= 0x20 && *p != 0x7F) {
+        clean[j++] = char(*p);
+      }
+    }
+    clean[j] = '\0';
+    if (clean[0]) {
+      lv_textarea_add_text(_compose_ta, clean);
+    }
+    return;
+  }
+  for (const unsigned char* p = reinterpret_cast<const unsigned char*>(utf8); *p; ++p) {
+    if (*p >= 0x20 && *p < 0x7F) {
+      onKeyPress(uint8_t(*p));
+    }
+  }
+}
+
 void App::onKeyPress(uint8_t key) {
   if (key == 27) {  // ESC -> unlock / back to Home
     _screen_locked = false;
@@ -239,7 +273,7 @@ void App::onKeyPress(uint8_t key) {
     showScreen(ScreenId::Home);
     return;
   }
-  if (_compose_ta != nullptr) {
+  if (isTyping()) {
     if (key == '\b' || key == 127) {
       lv_textarea_delete_char(_compose_ta);
       return;
@@ -290,7 +324,7 @@ void App::onKeyPress(uint8_t key) {
             strncpy(_thread_search_query, txt, sizeof(_thread_search_query) - 1);
             _thread_search_query[sizeof(_thread_search_query) - 1] = '\0';
             renderBody();
-          } else {
+          } else if (_selected_contact_idx < AppStore::kMaxContacts) {
             const auto& c = _store.contacts()[_selected_contact_idx];
             uint32_t crc = 0;
             DeliveryState st = DeliveryState::Queued;
@@ -313,9 +347,11 @@ void App::onKeyPress(uint8_t key) {
           }
           renderBody();
         } else if (_current_screen == ScreenId::ContactDetail && _contact_detail_tab == 3) {
-          const auto& c = _store.contacts()[_selected_contact_idx];
-          _actions.sendRemoteCli(c.pub_key, txt);
-          renderBody();
+          if (_selected_contact_idx < AppStore::kMaxContacts) {
+            const auto& c = _store.contacts()[_selected_contact_idx];
+            _actions.sendRemoteCli(c.pub_key, txt);
+            renderBody();
+          }
         } else if (_current_screen == ScreenId::Settings && !_settings_hub) {
           if (_settings_tab == 1) {
             _actions.setNodeName(txt);
@@ -346,6 +382,11 @@ void App::onKeyPress(uint8_t key) {
     }
     if (key >= 32 && key < 127) {
       lv_textarea_add_char(_compose_ta, char(key));
+      return;
+    }
+  } else if ((key == '\r' || key == '\n') && _input_group != nullptr) {
+    if (lv_obj_t* focused = lv_group_get_focused(_input_group)) {
+      lv_obj_send_event(focused, LV_EVENT_CLICKED, nullptr);
       return;
     }
   }
@@ -646,21 +687,57 @@ bool App::confirmTap(int action_id, const char* warning) {
 }
 
 uint32_t App::draftKey() const {
-  uint32_t sub = (uint32_t(_settings_tab & 0x0F) << 8) |
-                 (uint32_t(_wifi_edit_pwd ? 1 : 0) << 7) |
-                 (uint32_t(_settings_hub ? 1 : 0) << 6) |
-                 (uint32_t(_contact_detail_tab & 0x07) << 3) |
-                 (uint32_t(_home_subpage || _chats_subpage || _channels_subpage || _channel_thread_subpage) << 2) |
-                 (uint32_t(_screen_locked ? 1 : 0));
-  return (uint32_t(_current_screen) << 24) ^
-         (uint32_t(_selected_contact_idx & 0xFF) << 16) ^
-         (uint32_t(_selected_channel_idx & 0x0F) << 12) ^
-         sub;
+  auto mix = [](uint32_t h, uint32_t v) -> uint32_t {
+    h ^= v & 0xFFU;
+    h *= 0x01000193U;
+    return h;
+  };
+  uint32_t h = 0x811C9DC5U;
+  h = mix(h, uint32_t(_current_screen));
+  h = mix(h, uint32_t(_selected_contact_idx & 0xFFU));
+  h = mix(h, uint32_t((_selected_contact_idx >> 8) & 0xFFU));
+  h = mix(h, uint32_t(_selected_channel_idx));
+  h = mix(h, uint32_t(_settings_tab));
+  h = mix(h, uint32_t(_contact_detail_tab));
+  h = mix(h, uint32_t(_diag_tab));
+  const uint32_t flags1 = (uint32_t(_settings_hub ? 1 : 0) << 0) |
+                          (uint32_t(_wifi_edit_pwd ? 1 : 0) << 1) |
+                          (uint32_t(_screen_locked ? 1 : 0) << 2) |
+                          (uint32_t(_thread_search_active ? 1 : 0) << 3) |
+                          (uint32_t(_home_subpage ? 1 : 0) << 4) |
+                          (uint32_t(_chats_subpage ? 1 : 0) << 5) |
+                          (uint32_t(_chat_thread_subpage ? 1 : 0) << 6) |
+                          (uint32_t(_channels_subpage ? 1 : 0) << 7);
+  const uint32_t flags2 = (uint32_t(_channel_thread_subpage ? 1 : 0) << 0) |
+                          (uint32_t(_discover_subpage ? 1 : 0) << 1) |
+                          (uint32_t(_contacts_subpage ? 1 : 0) << 2);
+  h = mix(h, flags1);
+  h = mix(h, flags2);
+  return h == 0xFFFFFFFFU ? 0xFFFFFFFEU : h;
 }
 
 void App::renderBody() {
   if (!_body) return;
   const uint32_t next_key = draftKey();
+  const bool same_view = (_view_key == next_key);
+  const lv_coord_t saved_scroll_y = same_view ? lv_obj_get_scroll_y(_body) : 0;
+
+  bool focus_compose = true;
+  int saved_focus_idx = -1;
+  if (same_view && _input_group != nullptr) {
+    lv_obj_t* focused = lv_group_get_focused(_input_group);
+    if (focused != nullptr && focused != _compose_ta) {
+      focus_compose = false;
+      const uint32_t cnt = lv_group_get_obj_count(_input_group);
+      for (uint32_t i = 0; i < cnt; ++i) {
+        if (lv_group_get_obj_by_index(_input_group, i) == focused) {
+          saved_focus_idx = int(i);
+          break;
+        }
+      }
+    }
+  }
+
   if (_compose_ta && _compose_key == next_key) {
     // Only preserve draft text when re-rendering the exact same view/tab, and never for password/PIN fields
     bool is_pwd = lv_textarea_get_password_mode(_compose_ta) ||
@@ -670,7 +747,7 @@ void App::renderBody() {
       strncpy(_draft_text, cur ? cur : "", sizeof(_draft_text) - 1);
       _draft_text[sizeof(_draft_text) - 1] = '\0';
       _draft_key = _compose_key;
-      _draft_focused = _input_group && lv_group_get_focused(_input_group) == _compose_ta;
+      _draft_focused = focus_compose;
     } else {
       _draft_text[0] = '\0';
       _draft_key = 0xFFFFFFFFU;
@@ -742,8 +819,8 @@ void App::renderBody() {
     lv_obj_set_style_border_width(_compose_ta, 2, cur_sel);
     lv_obj_set_style_border_side(_compose_ta, LV_BORDER_SIDE_LEFT, cur_sel);
 
-    // Focus the textbox on touch click and ensure it is focused when present
-    if (_input_group) {
+    // Focus the textbox on touch click and ensure it is focused unless keypad moved focus away
+    if (_input_group && focus_compose) {
       lv_group_focus_obj(_compose_ta);
     }
     lv_obj_add_event_cb(_compose_ta, [](lv_event_t* e) {
@@ -753,6 +830,21 @@ void App::renderBody() {
         lv_group_focus_obj(ta);
       }
     }, LV_EVENT_CLICKED, this);
+  }
+  if (!focus_compose && _input_group && saved_focus_idx >= 0) {
+    const uint32_t cnt = lv_group_get_obj_count(_input_group);
+    if (cnt > 0) {
+      const uint32_t idx = uint32_t(saved_focus_idx) < cnt ? uint32_t(saved_focus_idx) : (cnt - 1);
+      if (lv_obj_t* target = lv_group_get_obj_by_index(_input_group, idx)) {
+        lv_group_focus_obj(target);
+      }
+    }
+  }
+
+  _view_key = next_key;
+  if (same_view && saved_scroll_y != 0) {
+    lv_obj_update_layout(_body);
+    lv_obj_scroll_to_y(_body, saved_scroll_y, LV_ANIM_OFF);
   }
 
   if (_show_wifi_ap_modal && _current_screen == ScreenId::Settings && _settings_tab == 4 &&

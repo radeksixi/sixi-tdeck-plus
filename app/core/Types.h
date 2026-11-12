@@ -30,7 +30,8 @@ enum class Language : uint8_t {
   EN = 0,
   IT = 1,
   DE = 2,
-  FR = 3
+  FR = 3,
+  PL = 4
 };
 
 struct ContactRecord {
@@ -66,11 +67,20 @@ struct ContactRecord {
   double lonDeg() const { return double(gps_lon_e6) / 1000000.0; }
 
   bool hasPath() const { return out_path_len != 0xFF; }
-  uint8_t pathHops() const { return hasPath() ? uint8_t(out_path_len & 63) : 0; }
-  uint8_t pathHashSize() const { return hasPath() ? uint8_t((out_path_len >> 6) + 1) : 1; }
+  uint8_t pathHops() const { return decodePathHops(out_path_len); }
+  uint8_t pathHashSize() const { return decodePathHashSize(out_path_len); }
   // Bytes of out_path in use (hops x hash size, at most the buffer)
-  uint8_t pathByteLen() const {
-    const unsigned n = unsigned(pathHops()) * pathHashSize();
+  uint8_t pathByteLen() const { return decodePathByteLen(out_path_len); }
+
+  static uint8_t decodePathHops(uint8_t plen) {
+    return plen == 0xFF ? 0 : uint8_t(plen & 63);
+  }
+  static uint8_t decodePathHashSize(uint8_t plen) {
+    return plen == 0xFF ? 1 : uint8_t((plen >> 6) + 1);
+  }
+  static uint8_t decodePathByteLen(uint8_t plen) {
+    if (plen == 0xFF) return 0;
+    const unsigned n = unsigned(plen & 63) * unsigned((plen >> 6) + 1);
     return uint8_t(n > sizeof(out_path) ? sizeof(out_path) : n);
   }
   static uint8_t encodePathLen(uint8_t hash_size, uint8_t hops) {
@@ -339,7 +349,6 @@ struct SystemStatus {
   uint32_t ble_pin = 123456;
   bool     wifi_enabled = true;
   bool     wifi_connected = false;
-  bool     wifi_auth_enabled = false;  // Sixi: /faro/wifi_psk.bin found, TCP 5000 guarded
   bool     wifi_ap_active = false;     // phone-setup SoftAP is running
   char     wifi_ap_ssid[33] = {0};
   char     wifi_ap_pwd[16] = {0};

@@ -90,7 +90,9 @@ void App::buildHomeView(lv_obj_t* parent) {
     Theme::styleTouchButton(qr_send, p.success, lv_color_hex(0xFFFFFF));
     lv_obj_add_event_cb(qr_send, [](lv_event_t* e) {
       auto* self = static_cast<App*>(lv_event_get_user_data(e));
-      if (self) self->onKeyPress('\r');
+      if (!self) return;
+      if (self->_input_group && self->_compose_ta) lv_group_focus_obj(self->_compose_ta);
+      self->onKeyPress('\r');
     }, LV_EVENT_CLICKED, this);
     lv_obj_t* qsl = lv_label_create(qr_send);
     lv_obj_set_style_text_font(qsl, &faro_font_12, 0);
@@ -818,8 +820,10 @@ void App::buildChatThreadView(lv_obj_t* parent) {
           a->openContactDetail(a->_selected_contact_idx);
         } else if (ctx->idx == 1) {
           a->_chat_thread_subpage = false;
-          const auto& c = a->_store.contacts()[a->_selected_contact_idx];
-          a->_actions.resetContactPath(c.pub_key);
+          if (a->_selected_contact_idx < AppStore::kMaxContacts) {
+            const auto& c = a->_store.contacts()[a->_selected_contact_idx];
+            a->_actions.resetContactPath(c.pub_key);
+          }
           a->renderBody();
         } else if (ctx->idx == 2) {
           a->_chat_thread_subpage = false;
@@ -841,8 +845,10 @@ void App::buildChatThreadView(lv_obj_t* parent) {
             if (btn && lv_obj_get_child_count(btn) > 0) lv_label_set_text(lv_obj_get_child(btn, 0), "Tap again!");
             return;
           }
-          const auto& c = a->_store.contacts()[a->_selected_contact_idx];
-          a->_store.clearMessagesForPeer(c.pub_key);
+          if (a->_selected_contact_idx < AppStore::kMaxContacts) {
+            const auto& c = a->_store.contacts()[a->_selected_contact_idx];
+            a->_store.clearMessagesForPeer(c.pub_key);
+          }
           a->_chat_thread_subpage = false;
           a->renderBody();
         }
@@ -931,6 +937,7 @@ void App::buildChatThreadView(lv_obj_t* parent) {
         App* a = ctx->app;
         if (a->_compose_ta) {
           lv_textarea_add_text(a->_compose_ta, ctx->s);
+          if (a->_input_group) lv_group_focus_obj(a->_compose_ta);
         }
         a->_show_compose_helper = false;
         a->renderBody();
@@ -951,14 +958,16 @@ void App::buildChatThreadView(lv_obj_t* parent) {
     lv_obj_set_flex_align(dbar, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_remove_flag(dbar, LV_OBJ_FLAG_SCROLLABLE);
 
-    static const char* kDiacritics[6] = {"ä", "ö", "ü", "è", "é", "Paste"};
+    static const char* kDiacriticsWest[6] = {"ä", "ö", "ü", "è", "é", "Paste"};
+    static const char* kDiacriticsPl[6]   = {"ą", "ę", "ł", "ś", "ż", "Paste"};
+    const char* const* diacritics = (lang == Language::PL) ? kDiacriticsPl : kDiacriticsWest;
     struct DiaCtx { App* app; const char* s; };
     static DiaCtx s_dctx[6];
     for (int d = 0; d < 6; ++d) {
       lv_obj_t* db = lv_button_create(dbar);
       lv_obj_set_size(db, d == 5 ? 54 : 42, 22);
       Theme::styleTouchButton(db, p.surface_alt, p.accent);
-      s_dctx[d] = {this, kDiacritics[d]};
+      s_dctx[d] = {this, diacritics[d]};
       lv_obj_add_event_cb(db, [](lv_event_t* e) {
         auto* ctx = static_cast<DiaCtx*>(lv_event_get_user_data(e));
         App* a = ctx->app;
@@ -969,12 +978,13 @@ void App::buildChatThreadView(lv_obj_t* parent) {
         } else if (a->_compose_ta) {
           lv_textarea_add_text(a->_compose_ta, ctx->s);
         }
+        if (a->_compose_ta && a->_input_group) lv_group_focus_obj(a->_compose_ta);
         a->_show_compose_helper = false;
         a->renderBody();
       }, LV_EVENT_CLICKED, &s_dctx[d]);
       lv_obj_t* dlbl = lv_label_create(db);
       lv_obj_set_style_text_font(dlbl, &faro_font_12, 0);
-      lv_label_set_text(dlbl, kDiacritics[d]);
+      lv_label_set_text(dlbl, diacritics[d]);
       lv_obj_center(dlbl);
     }
 
@@ -989,10 +999,13 @@ void App::buildChatThreadView(lv_obj_t* parent) {
       lv_obj_add_event_cb(cb, [](lv_event_t* e) {
         auto* ctx = static_cast<CanCtx*>(lv_event_get_user_data(e));
         App* a = ctx->app;
-        const auto& c = a->_store.contacts()[a->_selected_contact_idx];
-        uint32_t crc = 0;
-        DeliveryState st = DeliveryState::Queued;
-        a->_actions.sendDirectMessage(c.pub_key, a->_store.cannedAt(ctx->idx), crc, st);
+        if (a->_selected_contact_idx < AppStore::kMaxContacts) {
+          const auto& c = a->_store.contacts()[a->_selected_contact_idx];
+          uint32_t crc = 0;
+          DeliveryState st = DeliveryState::Queued;
+          a->_actions.sendDirectMessage(c.pub_key, a->_store.cannedAt(ctx->idx), crc, st);
+        }
+        if (a->_compose_ta && a->_input_group) lv_group_focus_obj(a->_compose_ta);
         a->_show_compose_helper = false;
         a->renderBody();
       }, LV_EVENT_CLICKED, &s_can_ctx[ci]);
@@ -1116,6 +1129,7 @@ void App::buildChatThreadView(lv_obj_t* parent) {
     auto* self = static_cast<App*>(lv_event_get_user_data(e));
     if (!self || !self->_compose_ta) return;
     const char* cur = lv_textarea_get_text(self->_compose_ta);
+    if (self->_input_group) lv_group_focus_obj(self->_compose_ta);
     if (self->_thread_search_active) {
       strncpy(self->_thread_search_query, cur ? cur : "", sizeof(self->_thread_search_query) - 1);
       self->_thread_search_query[sizeof(self->_thread_search_query) - 1] = '\0';
@@ -1126,10 +1140,12 @@ void App::buildChatThreadView(lv_obj_t* parent) {
     char txt[sizeof(self->_draft_text)] = {0};
     strncpy(txt, cur, sizeof(txt) - 1);
     lv_textarea_set_text(self->_compose_ta, "");
-    const auto& c = self->_store.contacts()[self->_selected_contact_idx];
-    uint32_t crc = 0;
-    DeliveryState st = DeliveryState::Queued;
-    self->_actions.sendDirectMessage(c.pub_key, txt, crc, st);
+    if (self->_selected_contact_idx < AppStore::kMaxContacts) {
+      const auto& c = self->_store.contacts()[self->_selected_contact_idx];
+      uint32_t crc = 0;
+      DeliveryState st = DeliveryState::Queued;
+      self->_actions.sendDirectMessage(c.pub_key, txt, crc, st);
+    }
     self->renderBody();
   }, LV_EVENT_CLICKED, this);
   lv_obj_t* sl = lv_label_create(send_btn);
@@ -1536,6 +1552,7 @@ void App::buildChannelThreadView(lv_obj_t* parent) {
         App* a = ctx->app;
         if (a->_compose_ta) {
           lv_textarea_add_text(a->_compose_ta, ctx->s);
+          if (a->_input_group) lv_group_focus_obj(a->_compose_ta);
         }
         a->_show_compose_helper = false;
         a->renderBody();
@@ -1557,6 +1574,7 @@ void App::buildChannelThreadView(lv_obj_t* parent) {
         auto* ctx = static_cast<ChCanCtx*>(lv_event_get_user_data(e));
         App* a = ctx->app;
         a->_actions.sendChannelMessage(a->_selected_channel_idx, a->_store.cannedAt(ctx->idx));
+        if (a->_compose_ta && a->_input_group) lv_group_focus_obj(a->_compose_ta);
         a->_show_compose_helper = false;
         a->renderBody();
       }, LV_EVENT_CLICKED, &s_ch_can_ctx[ci]);
@@ -1688,6 +1706,7 @@ void App::buildChannelThreadView(lv_obj_t* parent) {
     auto* self = static_cast<App*>(lv_event_get_user_data(e));
     if (!self || !self->_compose_ta) return;
     const char* cur = lv_textarea_get_text(self->_compose_ta);
+    if (self->_input_group) lv_group_focus_obj(self->_compose_ta);
     if (self->_thread_search_active) {
       strncpy(self->_thread_search_query, cur ? cur : "", sizeof(self->_thread_search_query) - 1);
       self->_thread_search_query[sizeof(self->_thread_search_query) - 1] = '\0';

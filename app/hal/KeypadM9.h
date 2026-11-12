@@ -20,6 +20,7 @@ public:
 
   bool begin();
   bool isAvailable() const { return _available; }
+  void setBacklight(bool on);
   // Returns a new key code, 0 when none (read on the KB_INT pulse, polled every 250 ms otherwise)
   uint8_t readKey(uint32_t now_ms);
 

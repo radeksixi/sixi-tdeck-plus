@@ -159,20 +159,25 @@ void App::buildSettingsView(lv_obj_t* parent) {
     lv_obj_set_pos(info, 0, 0);
     lv_obj_set_style_text_font(info, &faro_font_12, 0);
     lv_obj_set_style_text_color(info, p.text_secondary, 0);
-    lv_label_set_text(info, "Select language (EN / IT / DE / FR) & screen:");
+    lv_label_set_text(info, "Select language (EN / IT / DE / FR / PL) & screen:");
 
     struct LangCtx { App* app; Language lang; };
-    static LangCtx s_lctx[4];
-    static const Language kLangs[4] = {
-      Language::EN, Language::IT, Language::DE, Language::FR
+    static LangCtx s_lctx[5];
+    static const Language kLangs[5] = {
+      Language::EN, Language::IT, Language::DE, Language::FR, Language::PL
     };
-    static const char* kLangLabels[4] = {
-      "1. English (EN)", "2. Italiano (IT)", "3. Deutsch (DE)", "4. Français (FR)"
+    static const char* kLangLabels[5] = {
+      "English (EN)", "Italiano (IT)", "Deutsch (DE)", "Français (FR)", "Polski (PL)"
     };
-    for (int i = 0; i < 4; ++i) {
+    for (int i = 0; i < 5; ++i) {
       lv_obj_t* lb = lv_button_create(lcard);
-      lv_obj_set_size(lb, 144, 30);
-      lv_obj_set_pos(lb, (i % 2) * 150, 20 + (i / 2) * 36);
+      if (i < 3) {
+        lv_obj_set_size(lb, 94, 30);
+        lv_obj_set_pos(lb, i * 100, 20);
+      } else {
+        lv_obj_set_size(lb, 144, 30);
+        lv_obj_set_pos(lb, (i - 3) * 150, 56);
+      }
       bool sel = (lang == kLangs[i]);
       Theme::styleTouchButton(lb, sel ? p.accent : p.surface_alt,
                               sel ? lv_color_hex(0xFFFFFF) : p.text_primary);
@@ -585,7 +590,7 @@ void App::buildSettingsView(lv_obj_t* parent) {
             self->_actions.setPathHashMode(pr.path_hash_bytes);
           }
           self->updateStatusBar();
-          self->renderBody();
+          self->_defer_render = true;
         }
       }
     }, LV_EVENT_ALL, this);
@@ -761,16 +766,15 @@ void App::buildSettingsView(lv_obj_t* parent) {
     lv_label_set_long_mode(wlbl, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_font(wlbl, &faro_font_mono_12, 0);
     lv_obj_set_style_text_color(wlbl, st.wifi_connected ? p.success : p.text_primary, 0);
+    lv_obj_set_width(wlbl, 294);
     lv_label_set_text_fmt(wlbl,
                           "WiFi:%s %s (%s)\n"
-                          "A:%s %.10s %s",
+                          "SSID: %.18s %s",
                           st.wifi_enabled ? "ON" : "OFF",
                           st.wifi_connected ? "CONNECTED" : "DISCONN",
                           st.wifi_connected ? st.wifi_ip : "DHCP",
-                          st.wifi_auth_enabled ? "PSK" : "OPEN",
                           st.wifi_ssid[0] ? st.wifi_ssid : "(not set)",
                           st.wifi_pwd[0] ? "Pwd:set" : "Pwd:none");
-
 
     // Scanned Wi-Fi Networks Dropdown + [Scan WiFi] button (y = 32)
     char w_opts[384] = {0};
@@ -825,7 +829,7 @@ void App::buildSettingsView(lv_obj_t* parent) {
           // Automatically switch textbox to Password entry after picking an SSID
           self->_wifi_edit_pwd = true;
           self->_wifi_show_pwd = false;
-          self->renderBody();
+          self->_defer_render = true;
         }
       }
     }, LV_EVENT_ALL, this);

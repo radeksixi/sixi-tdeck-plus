@@ -3,15 +3,35 @@ name: Faro CI
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "LICENSES/**"
+      - "LICENSE"
+      - "NOTICE"
+      - "web-flasher/**"
   pull_request:
     branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "LICENSES/**"
+      - "LICENSE"
+      - "NOTICE"
+      - "web-flasher/**"
   workflow_dispatch:
+    inputs:
+      build_firmware:
+        description: "Build all 5 PlatformIO firmware targets (default: fast ~20s host CTest only)"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -49,7 +69,7 @@ jobs:
         run: scripts/license_audit.sh
 
   host:
-    if: github.repository == 'radeksixi/sixi-tdeck-plus'   # public repository only
+    if: github.repository == 'radeksixi/sixi-tdeck-plus' || github.event_name == 'workflow_dispatch'
     name: Host build and tests (-Wall -Wextra)
     runs-on: ubuntu-24.04
     env:
@@ -73,10 +93,13 @@ jobs:
       - name: CTest (unit tests + headless simulator + desktop console)
         run: ctest --test-dir build --output-on-failure
       - name: check-edition on the host binaries
+        if: github.repository == 'radeksixi/sixi-tdeck-plus'
         run: python3 scripts/check-edition.py --no-history build/faro-sim build/faro-console
 
   firmware:
-    if: github.repository == 'radeksixi/sixi-tdeck-plus'   # public repository only
+    if: >-
+      github.repository == 'radeksixi/sixi-tdeck-plus' &&
+      (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.build_firmware))
     name: Firmware ${{ matrix.env }}
     runs-on: ubuntu-24.04
     strategy:
