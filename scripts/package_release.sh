@@ -6,7 +6,7 @@
 #
 # Inputs (build them first; nothing is silently skipped, a missing input is an error):
 #   firmware   ${FARO_PIO_BUILD:-external/MeshCore/.pio/build}/<env>/{firmware.bin,bootloader.bin,partitions.bin}
-#              for every env in FARO_FW_ENVS (default: the five community envs below; set to "" to skip)
+#              for every env in FARO_FW_ENVS (default: faro_tdeck and faro_tdeck_max; set to "" to skip)
 #   desktop    ${FARO_HOST_BUILD:-build}/<bin> for every bin in FARO_HOST_BINS (default: faro-sim faro-console;
 #              set to "" to skip)
 # Output: ${FARO_DIST_DIR:-dist}/ (wiped first) holding exactly the release assets:
@@ -29,7 +29,7 @@ VERSION="${1:-${FARO_VERSION:-}}"
 PIO_BUILD="${FARO_PIO_BUILD:-${ROOT_DIR}/external/MeshCore/.pio/build}"
 HOST_BUILD="${FARO_HOST_BUILD:-${ROOT_DIR}/build}"
 DIST="${FARO_DIST_DIR:-${ROOT_DIR}/dist}"
-FW_ENVS="${FARO_FW_ENVS-faro_tdeck faro_tdeck_max faro_heltec_v3 faro_tbeam_supreme faro_thinknode_m9}"
+FW_ENVS="${FARO_FW_ENVS-faro_tdeck faro_tdeck_max}"
 HOST_BINS="${FARO_HOST_BINS-faro-sim faro-console}"
 DEB_MAINTAINER="${FARO_DEB_MAINTAINER:-Sixi AI <https://github.com/radeksixi/sixi-tdeck-plus/issues>}"
 GIT_SHA="$(git -C "${ROOT_DIR}" rev-parse --short=10 HEAD)"

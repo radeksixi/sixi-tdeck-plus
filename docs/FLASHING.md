@@ -8,7 +8,7 @@ Release files (GitHub release `v0.12.1`):
 | `faro-<board>-0.12.1-app.bin` | `0x10000` | Update of an existing Faro or MeshCore companion install; keeps identity, contacts, channels |
 | `SHA256SUMS` | — | Check first: `sha256sum -c SHA256SUMS` |
 
-`<board>` is `tdeck` (T-Deck and T-Deck Plus), `tdeck-max`, `thinknode-m9`, `tbeam-supreme` or `heltec-v3`.
+`<board>` is `tdeck` (LilyGo T-Deck / T-Deck Plus) or `tdeck-max` (LilyGo T-Deck MAX).
 
 0.10.1 was the first release with the radio regions and the data Faro keeps on flash (both below). It also
 fixed a T-Deck Plus bootloop in the battery ADC that affected 0.10.0; if you still run 0.10.0, update.
@@ -46,7 +46,7 @@ You can flash from Chrome or Edge without installing anything on the
 (off → hold the trackball → on → release; the screen stays dark), connect USB-C, then in the flasher pick
 **ESP32-S3** and flash the **merged** image at `0x0` (first install) or the **app** image at `0x10000` (update).
 
-- **[Faro Web Flasher](https://radeksixi.github.io/sixi-tdeck-plus/)** — 1-click USB flashing for all 5 boards.
+- **[Faro Web Flasher](https://radeksixi.github.io/sixi-tdeck-plus/)** — 1-click USB flashing for T-Deck / T-Deck Plus and T-Deck MAX.
 - **[espflasher.app](https://espflasher.app/)** — load the downloaded `-merged.bin` file, or paste a URL.
 - Browser flashing by URL needs `Access-Control-Allow-Origin`. The release assets on `github.com` redirect to a
   host without it, so for URL-based flashing use the CORS-enabled copy on GitHub Pages:

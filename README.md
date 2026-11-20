@@ -80,22 +80,11 @@ The snake board reuses the map canvas buffer, so it costs no extra framebuffer m
 
 | Board | Env | Screen UI | Input |
 |---|---|---|---|
-| LilyGo T-Deck / T-Deck Plus | `faro_tdeck` | yes | touch, keyboard, trackball |
-| LilyGo T-Deck MAX | `faro_tdeck_max` | yes | touch, keyboard, trackball |
-| Elecrow ThinkNode M9 | `faro_thinknode_m9` | yes | keypad (experimental, see below) |
-| LilyGo T-Beam S3 Supreme | `faro_tbeam_supreme` | headless (BLE + Wi-Fi companion) | — |
-| Heltec WiFi LoRa 32 V3 | `faro_heltec_v3` | headless (BLE + Wi-Fi companion) | — |
+| LilyGo T-Deck / T-Deck Plus | `faro_tdeck` | yes (320×240, SD card) | touch, keyboard, trackball |
+| LilyGo T-Deck MAX | `faro_tdeck_max` | yes (320×240, SD card, 500 contacts) | touch, keyboard, trackball |
 
-- **SD card** (maps, exports, key backup): T-Deck / T-Deck Plus / T-Deck MAX only.
-- **ThinkNode M9:** the keypad (STC8H controller, I2C 0x6C) is the board's only input. Page keys move the focus,
-  Enter clicks or sends, Home/Back return to Home, Menu opens Settings, letters type. The arrow-key codes are not
-  documented; unknown codes are printed on the serial console. Not yet tested on hardware. The piezo plays the
-  message and alarm tones.
-- **Headless boards** keep upstream's behaviour for boards without a screen: the BLE PIN is the fixed default
-  `123456` (change it in the phone app). Their OLED stays off; the region follows the radio settings you set in
-  the phone app (see *Radio regions*).
-
-Also in this repository: a desktop console (`faro-console`, SDL2) that talks to a node over USB or TCP, and a
+Also in this repository: a Linux desktop console (`faro-console`, SDL2) that talks to **any** unmodified upstream
+MeshCore companion radio (T-Deck, Heltec V3, T-Beam, RAK4631, etc.) over USB serial or Wi-Fi TCP (`:5000`), and a
 headless simulator (`faro-sim`) that renders every screen to PNG.
 
 ## What it does
@@ -154,8 +143,8 @@ rules of your country.
   card is possible from Settings › SD after a confirmation tap; the file is not encrypted, so remove it from the
   card when done.
 - New private channels get a random key from the hardware RNG. `Public` and `#name` channels have well-known keys.
-- BLE PIN: random on screen-equipped boards, `123456` on headless boards (upstream default); weak PINs (123456,
-  repeated or sequential digits) are refused when set on the device.
+- BLE PIN: random per boot on the device; weak PINs (123456, repeated or sequential digits) are refused when set on
+  the device.
 - Message text is never written to the serial log. The chat history is stored unencrypted on the device's flash
   (see *What it does*).
 

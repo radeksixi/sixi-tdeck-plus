@@ -30,6 +30,7 @@ jobs:
     if: github.repository == 'radeksixi/sixi-tdeck-plus'   # public repository only
     name: Build catalog
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4.2.2
       - uses: actions/setup-python@v5.6.0
@@ -52,6 +53,7 @@ jobs:
     name: Deploy
     needs: build
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -64,6 +66,7 @@ jobs:
     name: Check the live catalog
     needs: deploy
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - name: Catalog and firmware are live, valid and CORS-enabled
         run: |

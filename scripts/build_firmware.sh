@@ -6,7 +6,7 @@
 # not inside the env's directory, so envs built into one build dir overwrite each other's app/
 # objects. Every env therefore gets its own build dir here.
 #
-# Usage: scripts/build_firmware.sh OUT_DIR [env ...]   (default: the five public envs)
+# Usage: scripts/build_firmware.sh OUT_DIR [env ...]   (default: faro_tdeck faro_tdeck_max)
 # Result: OUT_DIR/<env>/{firmware.bin,bootloader.bin,partitions.bin,firmware.elf}
 #         (the layout scripts/package_release.sh reads with FARO_PIO_BUILD=OUT_DIR)
 set -euo pipefail
@@ -14,7 +14,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT="${1:?usage: $0 OUT_DIR [env ...]}"
 shift || true
 ENVS=("$@")
-[[ ${#ENVS[@]} -gt 0 ]] || ENVS=(faro_tdeck faro_tdeck_max faro_heltec_v3 faro_tbeam_supreme faro_thinknode_m9)
+[[ ${#ENVS[@]} -gt 0 ]] || ENVS=(faro_tdeck faro_tdeck_max)
 mkdir -p "${OUT}"
 OUT="$(cd "${OUT}" && pwd)"
 for env in "${ENVS[@]}"; do

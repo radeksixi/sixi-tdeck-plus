@@ -66,7 +66,7 @@ fi
 
 # libraries actually compiled into community firmware (PlatformIO keeps one lib*/<Name>/ dir per library)
 PIO_BUILD="external/MeshCore/.pio/build"
-ENVS="${FARO_AUDIT_ENVS:-faro_tdeck faro_tdeck_max faro_heltec_v3 faro_tbeam_supreme faro_thinknode_m9}"
+ENVS="${FARO_AUDIT_ENVS:-faro_tdeck faro_tdeck_max}"
 # parts of the arduino-esp32 core (documented as one component)
 CORE_LIBS=" BLE FS LittleFS SD SD_MMC SPI SPIFFS WiFi WiFiClientSecure Wire Preferences Update WebServer ESPmDNS \
 DNSServer HTTPClient HTTPUpdate Ticker AsyncUDP ArduinoOTA Ethernet NetBIOS FFat USB EEPROM I2S ESP32 "

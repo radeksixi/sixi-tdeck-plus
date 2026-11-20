@@ -30,8 +30,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-# Boards with a screen. The headless builds (T-Beam Supreme, Heltec V3) are deliberately left out:
-# on those boards Faro keeps upstream's behaviour and adds nothing on-device.
+# Supported public boards (LilyGo T-Deck family).
 DEVICES = (
     {
         "board": "tdeck",
@@ -43,17 +42,9 @@ DEVICES = (
         "name": "LilyGo T-Deck Max",
         "subTitle": "on-device UI",
     },
-    {
-        "board": "thinknode-m9",
-        "name": "Elecrow ThinkNode M9",
-        "subTitle": "keypad UI",
-    },
 )
 
-# Headless companion boards: omitted from the Mesh America GUI catalog, but mirrored into
-# _site/firmware/<tag>/ so the GitHub Pages Web Flasher and docs/FLASHING.md CORS URLs work
-# identically across all 5 supported boards.
-HEADLESS_BOARDS = ("tbeam-supreme", "heltec-v3")
+HEADLESS_BOARDS = ()
 ROOT_DIR = Path(__file__).resolve().parent.parent
 
 DESCRIPTION = (

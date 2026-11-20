@@ -1,9 +1,9 @@
 name: Release (firmware + Linux x86_64)
 
-# Builds every release asset in CI from the tagged commit and the pinned public MeshCore submodule,
-# packages them with scripts/package_release.sh (LICENSE, NOTICE, LICENSES/, THIRD_PARTY.md in every
-# archive and the .deb; SHA256SUMS generated from the packaged files) and attaches them to a DRAFT
-# GitHub release for the tag. Publish the draft by hand after checking it.
+# Builds T-Deck / T-Deck MAX firmware and Linux x86_64 desktop packages in a single runner job from
+# the tagged commit and the pinned public MeshCore submodule (zero intermediate artifacts, one shared
+# PlatformIO cache across all versions), packages them with scripts/package_release.sh, and attaches
+# them to a DRAFT GitHub release for the tag. Publish the draft by hand after checking it.
 
 on:
   push:
@@ -11,6 +11,10 @@ on:
 
 permissions:
   contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 env:
   FARO_EDITION_MARKERS: ${{ secrets.FARO_EDITION_MARKERS }}   # private marker list (check-edition.py)
@@ -22,6 +26,7 @@ jobs:
     if: github.repository == 'radeksixi/sixi-tdeck-plus'   # public repository only
     name: Edition and licence gates
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4.2.2
         with:
@@ -48,126 +53,65 @@ jobs:
         run: python3 scripts/check-edition.py .
       - run: scripts/license_audit.sh
 
-  firmware:
+  release:
     if: github.repository == 'radeksixi/sixi-tdeck-plus'   # public repository only
-    name: Firmware ${{ matrix.env }}
+    name: Build, package and upload draft release
     needs: gates
     runs-on: ubuntu-24.04
-    strategy:
-      fail-fast: true
-      matrix:
-        env:
-          - faro_tdeck
-          - faro_tdeck_max
-          - faro_heltec_v3
-          - faro_tbeam_supreme
-          - faro_thinknode_m9
-    steps:
-      - uses: actions/checkout@v4.2.2
-        with:
-          submodules: true
-      - name: Submodule is the public MeshCore upstream
-        id: sub
-        run: |
-          url="$(git -C external/MeshCore remote get-url origin)"
-          [ "$url" = "$MESHCORE_URL" ] || { echo "::error::external/MeshCore was cloned from $url"; exit 1; }
-          echo "sha=$(git -C external/MeshCore rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-      - uses: actions/setup-python@v5.6.0
-        with:
-          python-version: "3.12"
-      - name: Cache PlatformIO packages and libraries
-        uses: actions/cache@v4.2.3
-        with:
-          path: |
-            ~/.platformio
-            ~/.cache/pip
-            external/MeshCore/.pio/libdeps
-          key: pio-${{ runner.os }}-${{ env.PLATFORMIO_VERSION }}-${{ matrix.env }}-${{ steps.sub.outputs.sha }}-${{ hashFiles('envs/*.ini') }}
-          restore-keys: |
-            pio-${{ runner.os }}-${{ env.PLATFORMIO_VERSION }}-${{ matrix.env }}-
-      - name: Install PlatformIO
-        run: pip install "platformio==${PLATFORMIO_VERSION}"
-      - name: Build ${{ matrix.env }}
-        run: |
-          scripts/link_env.sh
-          pio run -d external/MeshCore -e "${{ matrix.env }}"
-      - name: Licence audit of the linked libraries
-        run: FARO_AUDIT_ENVS="${{ matrix.env }}" scripts/license_audit.sh
-      - name: Collect build outputs
-        run: |
-          B="external/MeshCore/.pio/build/${{ matrix.env }}"
-          python3 scripts/check-edition.py --no-history "$B/firmware.bin" "$B/firmware.elf"
-          mkdir -p "out/${{ matrix.env }}"
-          cp "$B/firmware.bin" "$B/bootloader.bin" "$B/partitions.bin" "out/${{ matrix.env }}/"
-          if [ -f "$B/firmware-merged.bin" ]; then cp "$B/firmware-merged.bin" "out/${{ matrix.env }}/"; fi
-          cp ~/.platformio/packages/framework-arduinoespressif32/tools/partitions/boot_app0.bin "out/${{ matrix.env }}/"
-      - uses: actions/upload-artifact@v4.6.2
-        with:
-          name: fw-${{ matrix.env }}
-          path: out/
-          if-no-files-found: error
-          retention-days: 7
-
-  host:
-    if: github.repository == 'radeksixi/sixi-tdeck-plus'   # public repository only
-    name: Linux x86_64 desktop build
-    needs: gates
-    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
     env:
       SDL_VIDEODRIVER: dummy
     steps:
       - uses: actions/checkout@v4.2.2
         with:
           submodules: true
-      - name: Install SDL2, PNG and build tools
+      - name: Submodule and dependency cache key
+        id: sub
+        run: |
+          url="$(git -C external/MeshCore remote get-url origin)"
+          [ "$url" = "$MESHCORE_URL" ] || { echo "::error::external/MeshCore was cloned from $url"; exit 1; }
+          echo "sha=$(git -C external/MeshCore rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          deps="$(sed 's/;.*$//' envs/faro.ini | grep -E '@|https?://' | sort -u | sha256sum | cut -c1-12)"
+          echo "deps=${deps}" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-python@v5.6.0
+        with:
+          python-version: "3.12"
+      - name: Cache PlatformIO packages and libraries (shared T-Deck toolchain)
+        uses: actions/cache@v4.2.3
+        with:
+          path: |
+            ~/.platformio
+            ~/.cache/pip
+            external/MeshCore/.pio/libdeps
+          key: pio-${{ runner.os }}-${{ env.PLATFORMIO_VERSION }}-tdeck-${{ steps.sub.outputs.sha }}-${{ steps.sub.outputs.deps }}
+          restore-keys: |
+            pio-${{ runner.os }}-${{ env.PLATFORMIO_VERSION }}-tdeck-${{ steps.sub.outputs.sha }}-
+            pio-${{ runner.os }}-${{ env.PLATFORMIO_VERSION }}-tdeck-
+      - name: Install desktop build tools and PlatformIO
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build libsdl2-dev libpng-dev unifdef
-      - name: Configure, build and test
+          pip install "platformio==${PLATFORMIO_VERSION}"
+      - name: Build and test Linux x86_64 desktop binaries
         run: |
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
             "-DCMAKE_C_FLAGS=-Wall -Wextra" "-DCMAKE_CXX_FLAGS=-Wall -Wextra"
           cmake --build build
           ctest --test-dir build --output-on-failure
-      - name: Collect binaries
+          python3 scripts/check-edition.py --no-history build/faro-sim build/faro-console
+      - name: Build and audit T-Deck / T-Deck MAX firmware
         run: |
-          mkdir -p host-out
-          cp build/faro-sim build/faro-console host-out/
-      - uses: actions/upload-artifact@v4.6.2
-        with:
-          name: host-linux-x86_64
-          path: host-out/
-          if-no-files-found: error
-          retention-days: 7
-
-  release:
-    if: github.repository == 'radeksixi/sixi-tdeck-plus'   # public repository only
-    name: Package and upload
-    needs: [firmware, host]
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4.2.2
-        with:
-          submodules: true
-      - uses: actions/setup-python@v5.6.0
-        with:
-          python-version: "3.12"
-      - uses: actions/download-artifact@v4.3.0
-        with:
-          pattern: fw-*
-          path: pio-build
-          merge-multiple: true
-      - uses: actions/download-artifact@v4.3.0
-        with:
-          name: host-linux-x86_64
-          path: host-build
-      - name: Package
-        run: |
-          chmod 0755 host-build/*
-          FARO_PIO_BUILD="$PWD/pio-build" FARO_HOST_BUILD="$PWD/host-build" FARO_DIST_DIR="$PWD/dist" \
-            scripts/package_release.sh "${GITHUB_REF_NAME#v}"
+          scripts/link_env.sh
+          for env in faro_tdeck faro_tdeck_max; do
+            pio run -d external/MeshCore -e "$env"
+            FARO_AUDIT_ENVS="$env" scripts/license_audit.sh
+            B="external/MeshCore/.pio/build/$env"
+            python3 scripts/check-edition.py --no-history "$B/firmware.bin" "$B/firmware.elf"
+          done
+      - name: Package release assets
+        run: scripts/package_release.sh "${GITHUB_REF_NAME#v}"
       - name: Verify SHA256SUMS
         working-directory: dist
         run: sha256sum -c SHA256SUMS
